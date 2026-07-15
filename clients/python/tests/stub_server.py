@@ -16,18 +16,23 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
+from urllib.parse import parse_qs, urlsplit
 
 
 @dataclass
 class RecordedRequest:
     method: str
-    path: str
+    path: str  # full request target, including any query string
     headers: dict[str, str]
     body: bytes
 
     @property
     def json(self) -> Any:
         return json.loads(self.body)
+
+    @property
+    def query(self) -> dict[str, list[str]]:
+        return parse_qs(urlsplit(self.path).query)
 
 
 @dataclass
@@ -38,8 +43,11 @@ class JsonResponse:
 
 @dataclass
 class SseResponse:
+    """A streamed body written chunk-by-chunk with a flush between chunks."""
+
     chunks: list[bytes] = field(default_factory=list)
     delay: float = 0.005
+    content_type: str = "text/event-stream"
 
 
 Handler = Callable[[RecordedRequest], "JsonResponse | SseResponse"]
@@ -63,6 +71,9 @@ class _RequestHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         self._handle("POST")
 
+    def do_PUT(self) -> None:
+        self._handle("PUT")
+
     def do_DELETE(self) -> None:
         self._handle("DELETE")
 
@@ -78,7 +89,9 @@ class _RequestHandler(BaseHTTPRequestHandler):
         )
         stub.requests.append(request)
 
-        handler = stub.routes.get((method, self.path))
+        # Routes are keyed on the bare path; the query string is recorded
+        # on the request for assertions.
+        handler = stub.routes.get((method, urlsplit(self.path).path))
         if handler is None:
             self._send_json(
                 JsonResponse(404, {"error": "no stub route", "code": "NOT_FOUND"})
@@ -100,7 +113,7 @@ class _RequestHandler(BaseHTTPRequestHandler):
 
     def _send_sse(self, response: SseResponse) -> None:
         self.send_response(200)
-        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Content-Type", response.content_type)
         self.send_header("Cache-Control", "no-cache")
         self.end_headers()
         for chunk in response.chunks:
@@ -141,6 +154,13 @@ class StubServer:
 
     def sse(self, method: str, path: str, chunks: list[bytes]) -> None:
         self.on(method, path, lambda _req: SseResponse(chunks))
+
+    def ndjson(self, method: str, path: str, chunks: list[bytes]) -> None:
+        self.on(
+            method,
+            path,
+            lambda _req: SseResponse(chunks, content_type="application/x-ndjson"),
+        )
 
     def last_request(self) -> RecordedRequest:
         return self.requests[-1]

@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from collections.abc import Iterator
 from types import TracebackType
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import quote
 
 import httpx
@@ -20,6 +20,8 @@ from .models import (
     Status,
     StreamEvent,
     TokenInfo,
+    TrainingExportLine,
+    TrainingStats,
 )
 
 
@@ -131,6 +133,70 @@ class Client:
         self._request_json(
             "DELETE", f"/api/v1/conversations/{quote(conversation_id, safe='')}"
         )
+
+    # --- training data --------------------------------------------------------
+
+    def rate_message(
+        self, message_id: str, verdict: Literal["good", "bad"]
+    ) -> None:
+        """Rate an assistant answer; writes a training record.
+
+        Explicit evals bypass the capture toggle. Upserts by message id:
+        rating the same answer again updates the verdict. Only assistant
+        messages that carry SQL can be rated.
+        """
+        self._request_json(
+            "POST",
+            f"/api/v1/messages/{quote(message_id, safe='')}/eval",
+            json_body={"verdict": verdict},
+        )
+
+    def get_training_capture(self) -> bool:
+        """Read the automatic-capture setting."""
+        payload = self._request_json("GET", "/api/v1/training/capture")
+        return bool(payload["enabled"])
+
+    def set_training_capture(self, enabled: bool) -> bool:
+        """Enable/disable automatic capture (admin). Returns the new setting."""
+        payload = self._request_json(
+            "PUT", "/api/v1/training/capture", json_body={"enabled": enabled}
+        )
+        return bool(payload["enabled"])
+
+    def training_stats(self) -> TrainingStats:
+        """Training-record counts and capture range."""
+        return TrainingStats.from_dict(
+            self._request_json("GET", "/api/v1/training/stats")
+        )
+
+    def iter_training_export(
+        self, include_rows: bool = True, evaluated_only: bool = False
+    ) -> Iterator[TrainingExportLine]:
+        """Stream the JSONL training-data export, one parsed line per record.
+
+        The server stops the stream at a 64 MiB byte budget; compare the
+        number of yielded lines with :meth:`training_stats` to detect
+        truncation. Blank lines are skipped.
+        """
+        params = {
+            "includeRows": include_rows,
+            "evaluatedOnly": evaluated_only,
+        }
+        with self._http.stream(
+            "GET", "/api/v1/training/export", params=params
+        ) as response:
+            if not response.is_success:
+                response.read()
+                raise self._error(response)
+            for line in response.iter_lines():
+                if not line.strip():
+                    continue
+                yield TrainingExportLine.from_dict(json.loads(line))
+
+    def delete_training_records(self) -> int:
+        """Delete ALL training records (admin). Returns the number removed."""
+        payload = self._request_json("DELETE", "/api/v1/training/records")
+        return int(payload.get("deleted", 0))
 
     # --- tokens (admin: primary APP_ACCESS_TOKEN only) -----------------------
 

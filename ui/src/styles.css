@@ -472,3 +472,91 @@ code {
   font-size: 0.75rem;
   padding: 0.35rem 0 0.7rem;
 }
+
+/* ---- message rating ---- */
+
+.eval-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.eval-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 0.78rem;
+  padding: 0.15rem 0.65rem;
+}
+
+.eval-btn:hover:not(:disabled) {
+  background: var(--code-bg);
+  color: var(--text);
+}
+
+.eval-saved {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.eval-note {
+  color: var(--red-text);
+  font-size: 0.78rem;
+}
+
+/* ---- training data panel ---- */
+
+.header-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.training-panel {
+  margin-top: 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+  padding: 0.6rem 0.8rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  font-size: 0.88rem;
+}
+
+.training-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.training-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  cursor: pointer;
+}
+
+.training-toggle input {
+  accent-color: var(--accent);
+}
+
+.training-stats {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.training-spacer {
+  flex: 1;
+}
+
+.admin-note {
+  color: var(--amber-text);
+  background: var(--amber-bg);
+  border: 1px solid var(--amber-border);
+  border-radius: 8px;
+  padding: 0.4rem 0.6rem;
+  font-size: 0.82rem;
+}

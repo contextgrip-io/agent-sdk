@@ -180,6 +180,136 @@ class CreatedToken:
         )
 
 
+# --- training data ----------------------------------------------------------
+
+
+@dataclass
+class TrainingStats:
+    """GET /api/v1/training/stats response."""
+
+    records: int
+    evaluated: int
+    first_captured_at: str | None = None
+    last_captured_at: str | None = None
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "TrainingStats":
+        return cls(
+            records=data["records"],
+            evaluated=data["evaluated"],
+            first_captured_at=data.get("firstCapturedAt"),
+            last_captured_at=data.get("lastCapturedAt"),
+        )
+
+
+@dataclass
+class ExportConnection:
+    """Non-secret identity of the database a record was captured against."""
+
+    id: str
+    name: str
+    engine: str
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "ExportConnection":
+        return cls(id=data["id"], name=data["name"], engine=data["engine"])
+
+
+@dataclass
+class ExportContext:
+    """Capture context: session kind and source message id (for dedupe)."""
+
+    session: str | None = None
+    source_message_id: str | None = None
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "ExportContext":
+        return cls(
+            session=data.get("session"),
+            source_message_id=data.get("sourceMessageId"),
+        )
+
+
+@dataclass
+class ExportQuery:
+    """The generated SQL and the natural-language intent behind it."""
+
+    sql: str
+    intent: str | None = None
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "ExportQuery":
+        return cls(sql=data["sql"], intent=data.get("intent"))
+
+
+@dataclass
+class ExportResponse:
+    """Execution outcome for an exported record.
+
+    ``error`` is set when execution failed; ``row_sample`` is present only
+    when the export was requested with ``includeRows``.
+    """
+
+    row_count: int
+    truncated: bool
+    execution_time_ms: int
+    columns: list[str] | None = None
+    error: str | None = None
+    row_sample: list[list[Any]] | None = None
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "ExportResponse":
+        return cls(
+            row_count=data["rowCount"],
+            truncated=data["truncated"],
+            execution_time_ms=data["executionTimeMs"],
+            columns=data.get("columns"),
+            error=data.get("error"),
+            row_sample=data.get("rowSample"),
+        )
+
+
+@dataclass
+class ExportEval:
+    """Explicit good/bad verdict attached to a record, when rated."""
+
+    verdict: str
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "ExportEval":
+        return cls(verdict=data["verdict"])
+
+
+@dataclass
+class TrainingExportLine:
+    """One JSONL line from GET /api/v1/training/export.
+
+    Field layout matches ContextGrip's training export, so dumps from both
+    sources merge downstream without transformation.
+    """
+
+    id: str
+    captured_at: str
+    connection: ExportConnection
+    context: ExportContext
+    query: ExportQuery
+    response: ExportResponse
+    eval: ExportEval | None = None
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "TrainingExportLine":
+        eval_data = data.get("eval")
+        return cls(
+            id=data["id"],
+            captured_at=data["capturedAt"],
+            connection=ExportConnection.from_dict(data["connection"]),
+            context=ExportContext.from_dict(data.get("context") or {}),
+            query=ExportQuery.from_dict(data["query"]),
+            response=ExportResponse.from_dict(data["response"]),
+            eval=ExportEval.from_dict(eval_data) if eval_data is not None else None,
+        )
+
+
 # --- SSE stream events (POST /api/v1/messages) -----------------------------
 
 

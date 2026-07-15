@@ -90,6 +90,71 @@ export interface CreatedToken extends TokenInfo {
   token: string;
 }
 
+/** Eval verdict for an assistant answer. */
+export type TrainingVerdict = 'good' | 'bad';
+
+/** Body and response of `GET`/`PUT /api/v1/training/capture`. */
+export interface TrainingCapture {
+  enabled: boolean;
+}
+
+/** Response of `GET /api/v1/training/stats`. */
+export interface TrainingStats {
+  records: number;
+  /** Records carrying an eval verdict. */
+  evaluated: number;
+  firstCapturedAt?: string;
+  lastCapturedAt?: string;
+}
+
+/**
+ * One JSONL line of `GET /api/v1/training/export`. The field layout matches
+ * ContextGrip's training-data export, so dumps from both sources merge
+ * downstream without transformation.
+ */
+export interface TrainingExportLine {
+  id: string;
+  capturedAt: string;
+  connection: {
+    /** Stable non-secret hash of host:port/dbname. */
+    id: string;
+    /** Database name from DATABASE_URL. */
+    name: string;
+    /** Currently always `"postgresql"`. */
+    engine: string;
+  };
+  context: {
+    /** `"chat"` (SSE) or `"ask"` (one-shot). */
+    session?: string;
+    /** Assistant message id, for dedupe. */
+    sourceMessageId?: string;
+  };
+  query: {
+    sql: string;
+    /** The natural-language question. */
+    intent?: string;
+  };
+  response: {
+    columns?: string[];
+    rowCount: number;
+    truncated: boolean;
+    executionTimeMs: number;
+    error?: string;
+    rowSample?: unknown[][];
+  };
+  eval?: {
+    verdict: TrainingVerdict;
+  };
+}
+
+/** Options for {@link AiChatClient.exportTraining}. */
+export interface TrainingExportOptions {
+  /** Include bounded result row samples (server default: true). */
+  includeRows?: boolean;
+  /** Restrict to records with an eval verdict (server default: false). */
+  evaluatedOnly?: boolean;
+}
+
 /*
  * SSE event payloads for `POST /api/v1/messages`.
  *

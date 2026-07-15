@@ -20,6 +20,11 @@ import type {
   StreamResultEvent,
   StreamSqlEvent,
   TokenInfo,
+  TrainingCapture,
+  TrainingExportLine,
+  TrainingExportOptions,
+  TrainingStats,
+  TrainingVerdict,
 } from './types.js';
 import { parseSseFrame } from './sse.js';
 
@@ -132,6 +137,28 @@ function dispatchFrame(frameText: string, handlers: StreamHandlers): void {
 /** Frames are separated by a blank line; tolerate CRLF streams. */
 const FRAME_BOUNDARY = /\r?\n\r?\n/;
 
+/**
+ * Parse one NDJSON line into an object. Returns undefined for blank lines.
+ * The server enforces its export byte budget on whole lines, so a partial
+ * line can never legitimately occur — a line that fails to parse indicates
+ * corruption and throws rather than silently dropping a training record
+ * (matching the Go and Python clients).
+ */
+function parseNdjsonLine(rawLine: string): Record<string, unknown> | undefined {
+  const line = rawLine.endsWith('\r') ? rawLine.slice(0, -1) : rawLine;
+  if (line.trim() === '') return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(line);
+  } catch {
+    throw new Error(`exportTraining: malformed NDJSON line: ${line.slice(0, 80)}`);
+  }
+  if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
+    return parsed as Record<string, unknown>;
+  }
+  throw new Error(`exportTraining: NDJSON line is not an object: ${line.slice(0, 80)}`);
+}
+
 /** Client for the ContextGrip AI Chat API. */
 export class AiChatClient {
   readonly #baseUrl: string;
@@ -232,6 +259,96 @@ export class AiChatClient {
   /** `DELETE /api/v1/conversations/{id}` — delete a conversation and its messages. */
   async deleteConversation(id: string): Promise<void> {
     await this.#json('DELETE', `/api/v1/conversations/${encodeURIComponent(id)}`);
+  }
+
+  /**
+   * `POST /api/v1/messages/{id}/eval` — rate an assistant answer
+   * (good/bad); writes a training record. Explicit evals bypass the
+   * capture toggle. Upserts by message id: rating the same answer again
+   * updates the verdict. Only assistant messages that carry SQL can be
+   * rated.
+   */
+  async rateMessage(id: string, verdict: TrainingVerdict): Promise<void> {
+    await this.#json('POST', `/api/v1/messages/${encodeURIComponent(id)}/eval`, { verdict });
+  }
+
+  /** `GET /api/v1/training/capture` — read the automatic-capture setting. */
+  getTrainingCapture(): Promise<TrainingCapture> {
+    return this.#json('GET', '/api/v1/training/capture');
+  }
+
+  /**
+   * `PUT /api/v1/training/capture` — enable/disable automatic capture
+   * (admin: primary token only). When enabled (the default), every
+   * completed chat exchange is recorded as a training record; explicit
+   * evals are recorded regardless of this setting.
+   */
+  setTrainingCapture(enabled: boolean): Promise<TrainingCapture> {
+    return this.#json('PUT', '/api/v1/training/capture', { enabled });
+  }
+
+  /** `GET /api/v1/training/stats` — training-record counts and capture range. */
+  trainingStats(): Promise<TrainingStats> {
+    return this.#json('GET', '/api/v1/training/stats');
+  }
+
+  /**
+   * `GET /api/v1/training/export` — stream training records as JSONL
+   * (newline-delimited JSON), yielding one parsed {@link TrainingExportLine}
+   * per line. Blank lines are skipped; an incomplete final line (the server
+   * stops at a 64 MiB byte budget — compare the line count with
+   * `trainingStats()` to detect truncation) is skipped rather than raised.
+   *
+   * The request is made lazily on first iteration; a non-2xx response
+   * rejects the first `next()` with {@link AiChatError}. Breaking out of
+   * the loop early cancels the underlying stream.
+   */
+  async *exportTraining(
+    opts: TrainingExportOptions = {},
+  ): AsyncGenerator<TrainingExportLine, void, void> {
+    const params = new URLSearchParams();
+    if (opts.includeRows !== undefined) params.set('includeRows', String(opts.includeRows));
+    if (opts.evaluatedOnly !== undefined) params.set('evaluatedOnly', String(opts.evaluatedOnly));
+    const query = params.toString();
+    const path = `/api/v1/training/export${query === '' ? '' : `?${query}`}`;
+    const res = await this.#send('GET', path, undefined, 'application/x-ndjson');
+    if (res.body === null) {
+      throw new AiChatError('response has no body', res.status);
+    }
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        let newline: number;
+        while ((newline = buffer.indexOf('\n')) !== -1) {
+          const line = parseNdjsonLine(buffer.slice(0, newline));
+          buffer = buffer.slice(newline + 1);
+          if (line !== undefined) yield line as unknown as TrainingExportLine;
+        }
+      }
+      buffer += decoder.decode();
+      // Flush a trailing line not terminated by a newline.
+      const trailing = parseNdjsonLine(buffer);
+      if (trailing !== undefined) yield trailing as unknown as TrainingExportLine;
+    } finally {
+      try {
+        await reader.cancel();
+      } catch {
+        // The stream is already closed or errored; nothing to release.
+      }
+    }
+  }
+
+  /**
+   * `DELETE /api/v1/training/records` — delete ALL training records
+   * (admin: primary token only). Returns the number of records removed.
+   */
+  deleteTrainingRecords(): Promise<{ deleted: number }> {
+    return this.#json('DELETE', '/api/v1/training/records');
   }
 
   /** `GET /api/v1/tokens` — list named API tokens (admin: primary token only). */

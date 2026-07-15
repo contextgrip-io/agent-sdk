@@ -318,6 +318,22 @@ UPDATE conversations SET updated_at = ? WHERE id = ?
 	return &msg, nil
 }
 
+// GetMessage returns one message by id, or (nil, nil) when absent.
+func (s *Store) GetMessage(ctx context.Context, id string) (*Message, error) {
+	row := s.db.QueryRowContext(ctx, `
+SELECT id, conversation_id, seq, role, payload, created_at
+FROM messages WHERE id = ?
+`, id)
+	msg, err := scanMessage(row)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &msg, nil
+}
+
 // ListMessages returns a conversation's messages in order.
 func (s *Store) ListMessages(ctx context.Context, conversationID string) ([]Message, error) {
 	rows, err := s.db.QueryContext(ctx, `

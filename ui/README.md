@@ -1,4 +1,4 @@
-# AI Chat web UI
+# ContextGrip AI Chat web UI
 
 Single-page chat client for the AI Chat API. It is a pure API client of the Go
 server in [`../server`](../server) — no server-side code lives here. The
@@ -22,6 +22,13 @@ token minted via the API). The sign-in screen validates it against
 "Sign out" clears it. Answers stream over SSE from `POST /api/v1/messages`
 (`meta → sql → result → delta* → done | error`), parsed by the small
 spec-correct parser in `src/lib/sse.ts`.
+
+Training data: completed answers that carry SQL show 👍/👎 buttons
+(`POST /api/v1/messages/{id}/eval`), and the header's "Training data" button
+opens an inline panel over `/api/v1/training/*` — capture toggle, record
+stats, a JSONL export download (`training-export.jsonl`, optionally rated
+records only), and an admin-only delete-all. Admin-only calls made with a
+named token surface the server's 403 as an inline note.
 
 ## Develop
 
@@ -54,9 +61,10 @@ index.html            entry document
 vite.config.ts        dev proxy + build output (dist/)
 src/main.tsx          React root
 src/App.tsx           token gate, conversation state, streaming orchestration
-src/components/       SignIn, MessageList, SqlBlock, ResultTable, Composer
+src/components/       SignIn, MessageList (incl. rating), SqlBlock, ResultTable,
+                      Composer, TrainingPanel
 src/lib/types.ts      API types mirrored from openapi.yaml + UI message model
-src/lib/api.ts        fetch client (status/conversations/delete + SSE streaming)
+src/lib/api.ts        fetch client (status/conversations/eval/training + SSE streaming)
 src/lib/sse.ts        incremental SSE frame parser (tested)
 src/styles.css        the one stylesheet (light/dark via prefers-color-scheme)
 ```

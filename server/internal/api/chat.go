@@ -171,8 +171,8 @@ func (e *loopError) Error() string { return e.message }
 // ctx drives the expensive external work (model, database) and is the
 // request context so client disconnects cancel it; persistCtx must survive
 // disconnects (context.WithoutCancel) so records are never lost after SSE
-// headers are sent.
-func (s *Server) runExchange(ctx, persistCtx context.Context, ex *exchange, hooks loopHooks) (*runOutcome, *loopError) {
+// headers are sent. session ("ask" | "chat") tags the training capture.
+func (s *Server) runExchange(ctx, persistCtx context.Context, ex *exchange, session string, hooks loopHooks) (*runOutcome, *loopError) {
 	store := s.cfg.Chat
 
 	// persistFailure records an assistant error turn; the record must
@@ -300,6 +300,11 @@ func (s *Server) runExchange(ctx, persistCtx context.Context, ex *exchange, hook
 			message: "answer was generated but could not be saved"}
 	}
 
+	// The exchange completed (SQL + outcome + answer): auto-capture it as a
+	// training record when the toggle is on. Runs on persistCtx and swallows
+	// failures — capture must never fail or lose the chat response.
+	s.captureTraining(persistCtx, session, assistantMsg.ID, ex.question, generatedSQL, summary, result.Error)
+
 	return &runOutcome{
 		sql:          generatedSQL,
 		summary:      summary,
@@ -318,7 +323,7 @@ func (s *Server) handleAsk(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	persistCtx := context.WithoutCancel(r.Context())
-	outcome, loopErr := s.runExchange(r.Context(), persistCtx, ex, loopHooks{})
+	outcome, loopErr := s.runExchange(r.Context(), persistCtx, ex, "ask", loopHooks{})
 	if loopErr != nil {
 		writeError(w, loopErr.status, loopErr.code, loopErr.message)
 		return
@@ -374,7 +379,7 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 
 	_ = emit("meta", map[string]string{"conversationId": ex.conv.ID, "userMessageId": ex.userMsg.ID})
 
-	outcome, loopErr := s.runExchange(r.Context(), persistCtx, ex, loopHooks{
+	outcome, loopErr := s.runExchange(r.Context(), persistCtx, ex, "chat", loopHooks{
 		onSQL: func(sql string) {
 			_ = emit("sql", map[string]string{"sql": sql})
 		},

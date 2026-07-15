@@ -51,10 +51,30 @@ export interface ConversationDetail {
   messages: ApiMessage[];
 }
 
+export type Verdict = 'good' | 'bad';
+
+export interface TrainingCapture {
+  enabled: boolean;
+}
+
+export interface TrainingStats {
+  records: number;
+  /** Records carrying an eval verdict. */
+  evaluated: number;
+  firstCapturedAt?: string;
+  lastCapturedAt?: string;
+}
+
 // UI-side message model. A streamed assistant turn and a persisted assistant
 // message render through the same shape.
 export interface UiMessage {
   id: string;
+  /**
+   * Server-assigned assistant message id, adopted from the `done` event.
+   * Streamed turns start with a local placeholder id; only messages with a
+   * real (server) id can be rated.
+   */
+  serverId?: string;
   role: 'user' | 'assistant';
   /** User question, or the streamed/persisted assistant answer text. */
   text?: string;

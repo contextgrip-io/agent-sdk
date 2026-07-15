@@ -65,6 +65,9 @@ func routeClass(path string) string {
 		return "chat"
 	case path == "/api/v1/status":
 		return "status"
+	case strings.HasPrefix(path, "/api/v1/training") ||
+		(strings.HasPrefix(path, "/api/v1/messages/") && strings.HasSuffix(path, "/eval")):
+		return "training"
 	case strings.HasPrefix(path, "/api/v1/conversations"):
 		return "conversations"
 	case strings.HasPrefix(path, "/api/v1/tokens"):

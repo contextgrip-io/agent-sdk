@@ -8,6 +8,9 @@ import type {
   ConversationDetail,
   ResultEvent,
   Status,
+  TrainingCapture,
+  TrainingStats,
+  Verdict,
 } from './types';
 
 export class ApiError extends Error {
@@ -66,6 +69,54 @@ export async function deleteConversation(token: string, id: string): Promise<voi
     headers: authHeaders(token),
   });
   if (!res.ok) throw await toApiError(res);
+}
+
+/** Rate an assistant answer; the server upserts by message id. */
+export async function evalMessage(token: string, messageId: string, verdict: Verdict): Promise<void> {
+  const res = await fetch(`/api/v1/messages/${encodeURIComponent(messageId)}/eval`, {
+    method: 'POST',
+    headers: { ...authHeaders(token), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ verdict }),
+  });
+  if (!res.ok) throw await toApiError(res);
+}
+
+export function getTrainingCapture(token: string): Promise<TrainingCapture> {
+  return getJson<TrainingCapture>(token, '/api/v1/training/capture');
+}
+
+/** Admin-only (primary APP_ACCESS_TOKEN): 403 ADMIN_REQUIRED otherwise. */
+export async function setTrainingCapture(token: string, enabled: boolean): Promise<TrainingCapture> {
+  const res = await fetch('/api/v1/training/capture', {
+    method: 'PUT',
+    headers: { ...authHeaders(token), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ enabled }),
+  });
+  if (!res.ok) throw await toApiError(res);
+  return (await res.json()) as TrainingCapture;
+}
+
+export function getTrainingStats(token: string): Promise<TrainingStats> {
+  return getJson<TrainingStats>(token, '/api/v1/training/stats');
+}
+
+/** Fetch the JSONL training export as a Blob (for an anchor download). */
+export async function fetchTrainingExport(token: string, evaluatedOnly: boolean): Promise<Blob> {
+  const query = evaluatedOnly ? '?evaluatedOnly=true' : '';
+  const res = await fetch(`/api/v1/training/export${query}`, { headers: authHeaders(token) });
+  if (!res.ok) throw await toApiError(res);
+  return await res.blob();
+}
+
+/** Admin-only. Deletes ALL training records; resolves to the removed count. */
+export async function deleteTrainingRecords(token: string): Promise<number> {
+  const res = await fetch('/api/v1/training/records', {
+    method: 'DELETE',
+    headers: authHeaders(token),
+  });
+  if (!res.ok) throw await toApiError(res);
+  const body = (await res.json()) as { deleted?: number };
+  return typeof body.deleted === 'number' ? body.deleted : 0;
 }
 
 export interface StreamHandlers {

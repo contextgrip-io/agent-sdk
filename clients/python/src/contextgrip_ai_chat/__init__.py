@@ -14,6 +14,11 @@ from .models import (
     DeltaEvent,
     DoneEvent,
     ErrorEvent,
+    ExportConnection,
+    ExportContext,
+    ExportEval,
+    ExportQuery,
+    ExportResponse,
     Message,
     MetaEvent,
     ResultEvent,
@@ -22,6 +27,8 @@ from .models import (
     Status,
     StreamEvent,
     TokenInfo,
+    TrainingExportLine,
+    TrainingStats,
 )
 
 __version__ = "0.1.0"
@@ -36,6 +43,11 @@ __all__ = [
     "DeltaEvent",
     "DoneEvent",
     "ErrorEvent",
+    "ExportConnection",
+    "ExportContext",
+    "ExportEval",
+    "ExportQuery",
+    "ExportResponse",
     "Message",
     "MetaEvent",
     "ResultEvent",
@@ -44,5 +56,7 @@ __all__ = [
     "Status",
     "StreamEvent",
     "TokenInfo",
+    "TrainingExportLine",
+    "TrainingStats",
     "__version__",
 ]

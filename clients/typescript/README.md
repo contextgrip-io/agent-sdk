@@ -116,6 +116,41 @@ const tokens = await client.listTokens();                     // metadata only
 await client.revokeToken(created.id);
 ```
 
+## Training data
+
+Rate answers, control automatic capture, and export the accumulated training
+records as JSONL. `exportTraining` streams the NDJSON response and yields one
+parsed `TrainingExportLine` per line — the line format is compatible with
+ContextGrip's training-data export, so dumps from both sources merge
+downstream without transformation.
+
+```typescript
+// Rate an assistant answer (writes a training record; bypasses the
+// capture toggle). Only assistant messages that carry SQL can be rated.
+await client.rateMessage(assistantMessageId, 'good');
+
+// Automatic capture of completed exchanges (PUT is admin-only):
+const { enabled } = await client.getTrainingCapture();
+await client.setTrainingCapture(false);
+
+// Counts and capture range:
+const stats = await client.trainingStats();
+console.log(`${stats.evaluated}/${stats.records} records evaluated`);
+
+// Stream the export; options map to the query params:
+let exported = 0;
+for await (const line of client.exportTraining({ evaluatedOnly: true })) {
+  console.log(line.query.sql, line.eval?.verdict);
+  exported += 1;
+}
+// The export stops at a 64 MiB byte budget; compare the line count with
+// trainingStats() to detect truncation.
+if (exported < stats.evaluated) console.warn('export truncated');
+
+// Delete ALL training records (admin-only):
+const { deleted } = await client.deleteTrainingRecords();
+```
+
 ## Errors
 
 Every non-2xx response throws `AiChatError` with `status` (HTTP status) and,

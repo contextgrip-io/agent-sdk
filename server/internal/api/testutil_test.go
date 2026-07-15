@@ -17,6 +17,7 @@ import (
 	"github.com/contextgrip-io/agent-sdk/server/internal/chatstore"
 	"github.com/contextgrip-io/agent-sdk/server/internal/dbx"
 	"github.com/contextgrip-io/agent-sdk/server/internal/tokenstore"
+	"github.com/contextgrip-io/agent-sdk/server/internal/trainingstore"
 )
 
 const testPrimaryToken = "primary-token"
@@ -102,12 +103,18 @@ func defaultFakeDB() *fakeDB {
 // ── test environment ────────────────────────────────────────────────────────
 
 type testEnv struct {
-	server *Server
-	chat   *chatstore.Store
-	tokens *tokenstore.Store
-	model  *fakeModel
-	db     *fakeDB
+	server   *Server
+	chat     *chatstore.Store
+	tokens   *tokenstore.Store
+	training *trainingstore.Store
+	model    *fakeModel
+	db       *fakeDB
 }
+
+const (
+	testConnectionID   = "abc123def456"
+	testConnectionName = "mydb"
+)
 
 func newTestEnv(t *testing.T, mutate func(cfg *Config)) *testEnv {
 	t.Helper()
@@ -116,19 +123,25 @@ func newTestEnv(t *testing.T, mutate func(cfg *Config)) *testEnv {
 	require.NoError(t, err)
 	tokens, err := tokenstore.New(path)
 	require.NoError(t, err)
+	training, err := trainingstore.New(path)
+	require.NoError(t, err)
 	t.Cleanup(func() {
 		_ = chat.Close()
 		_ = tokens.Close()
+		_ = training.Close()
 	})
 
 	sum := sha256.Sum256([]byte(testPrimaryToken))
-	env := &testEnv{chat: chat, tokens: tokens, model: defaultFakeModel(), db: defaultFakeDB()}
+	env := &testEnv{chat: chat, tokens: tokens, training: training, model: defaultFakeModel(), db: defaultFakeDB()}
 	cfg := Config{
 		Model:              env.model,
 		ModelID:            env.model.modelID,
 		DB:                 env.db,
 		Chat:               chat,
 		Tokens:             tokens,
+		Training:           training,
+		ConnectionID:       testConnectionID,
+		ConnectionName:     testConnectionName,
 		PrimaryTokenSHA256: sum[:],
 	}
 	if mutate != nil {

@@ -15,6 +15,7 @@ import (
 	"github.com/contextgrip-io/agent-sdk/server/internal/chatstore"
 	"github.com/contextgrip-io/agent-sdk/server/internal/dbx"
 	"github.com/contextgrip-io/agent-sdk/server/internal/tokenstore"
+	"github.com/contextgrip-io/agent-sdk/server/internal/trainingstore"
 	"github.com/contextgrip-io/agent-sdk/server/internal/webui"
 )
 
@@ -51,9 +52,15 @@ type Config struct {
 	// ModelID is reported by /api/v1/status even when Model is nil.
 	ModelID string
 	// DB is nil when DATABASE_URL is not configured.
-	DB     Database
-	Chat   *chatstore.Store
-	Tokens *tokenstore.Store
+	DB       Database
+	Chat     *chatstore.Store
+	Tokens   *tokenstore.Store
+	Training *trainingstore.Store
+	// ConnectionID/ConnectionName tag training-export lines: a stable
+	// non-secret hash of host:port/dbname and the database name, derived
+	// from DATABASE_URL via dbx.ConnectionIdentity. Never credentials.
+	ConnectionID   string
+	ConnectionName string
 	// PrimaryTokenSHA256 is the SHA-256 of APP_ACCESS_TOKEN. Required unless
 	// DevNoAuth is set.
 	PrimaryTokenSHA256 []byte
@@ -93,9 +100,17 @@ func New(cfg Config) *Server {
 		r.Get("/status", s.handleStatus)
 		r.Post("/ask", s.handleAsk)
 		r.Post("/messages", s.handleMessages)
+		r.Post("/messages/{id}/eval", s.handleEvalMessage)
 		r.Get("/conversations", s.handleListConversations)
 		r.Get("/conversations/{id}", s.handleGetConversation)
 		r.Delete("/conversations/{id}", s.handleDeleteConversation)
+		r.Route("/training", func(r chi.Router) {
+			r.Get("/capture", s.handleGetTrainingCapture)
+			r.With(s.requireAdmin).Put("/capture", s.handleSetTrainingCapture)
+			r.Get("/stats", s.handleTrainingStats)
+			r.Get("/export", s.handleTrainingExport)
+			r.With(s.requireAdmin).Delete("/records", s.handleDeleteTrainingRecords)
+		})
 		r.Route("/tokens", func(r chi.Router) {
 			r.Use(s.requireAdmin)
 			r.Get("/", s.handleListTokens)

@@ -108,6 +108,53 @@ if err != nil {
 }
 ```
 
+## Training data
+
+Every completed exchange can be captured as a training record (question as
+intent, generated SQL, bounded result summary), and answers can be rated
+explicitly — explicit evals are kept regardless of the capture toggle.
+
+```go
+// Rate an assistant answer ("good" or "bad"); upserts by message id.
+err = client.RateMessage(ctx, assistantMessageID, aichat.VerdictGood)
+
+// Automatic capture toggle (Set is admin-only):
+enabled, err := client.TrainingCapture(ctx)           // GET /api/v1/training/capture
+enabled, err = client.SetTrainingCapture(ctx, false)  // PUT /api/v1/training/capture
+
+stats, err := client.TrainingStats(ctx)               // GET /api/v1/training/stats
+n, err := client.DeleteTrainingRecords(ctx)           // DELETE /api/v1/training/records (admin, deletes ALL)
+```
+
+### ExportTraining (JSONL stream)
+
+`ExportTraining` streams the training dump (`application/x-ndjson`), decoding
+one `TrainingExportLine` per line and calling your callback for each — the
+whole dump is never buffered in memory. Returning an error from the callback
+stops the stream and returns that error unchanged. The line format matches
+ContextGrip's training export, so dumps merge downstream without
+transformation.
+
+```go
+out := json.NewEncoder(file) // e.g. re-emit selected records
+err := client.ExportTraining(ctx, aichat.ExportOptions{
+	EvaluatedOnly: true, // only records with an eval verdict
+	// IncludeRows: nil leaves the server default (true); point at a bool
+	// to force: IncludeRows: &noRows
+}, func(line aichat.TrainingExportLine) error {
+	if line.Eval != nil && line.Eval.Verdict == aichat.VerdictBad {
+		return nil // skip bad examples
+	}
+	return out.Encode(line) // returning an error stops the stream
+})
+if err != nil {
+	log.Fatal(err)
+}
+```
+
+The server stops the stream at a 64 MiB byte budget; compare the number of
+callback calls with `TrainingStats` to detect truncation.
+
 ## Other endpoints
 
 ```go
@@ -121,6 +168,9 @@ tokens, err := client.ListTokens(ctx)              // GET  /api/v1/tokens
 created, err := client.CreateToken(ctx, "ci")      // POST /api/v1/tokens — created.Token shown once
 err = client.RevokeToken(ctx, created.ID)          // DELETE /api/v1/tokens/{id}
 ```
+
+Admin-only calls made with a named token fail with `*APIError` code
+`ADMIN_REQUIRED` (HTTP 403).
 
 To use a custom HTTP client (timeouts, proxies, transports):
 

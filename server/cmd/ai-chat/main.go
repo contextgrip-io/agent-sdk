@@ -19,6 +19,7 @@ import (
 	"github.com/contextgrip-io/agent-sdk/server/internal/chatstore"
 	"github.com/contextgrip-io/agent-sdk/server/internal/dbx"
 	"github.com/contextgrip-io/agent-sdk/server/internal/tokenstore"
+	"github.com/contextgrip-io/agent-sdk/server/internal/trainingstore"
 )
 
 func env(key, fallback string) string {
@@ -68,8 +69,14 @@ func main() {
 		log.Fatalf("open token store at %s: %v", dbPath, err)
 	}
 	defer tokens.Close()
+	training, err := trainingstore.New(dbPath)
+	if err != nil {
+		log.Fatalf("open training store at %s: %v", dbPath, err)
+	}
+	defer training.Close()
 	cfg.Chat = chat
 	cfg.Tokens = tokens
+	cfg.Training = training
 
 	// Chat endpoints serve 503 NOT_CONFIGURED until both of these are set;
 	// UI and health endpoints work regardless.
@@ -82,6 +89,9 @@ func main() {
 		db := dbx.Open(databaseURL)
 		defer db.Close()
 		cfg.DB = db
+		// Non-secret identity for training-export lines (hash of
+		// host:port/dbname + database name — never credentials).
+		cfg.ConnectionID, cfg.ConnectionName = dbx.ConnectionIdentity(databaseURL)
 	} else {
 		log.Printf("DATABASE_URL is not set; chat endpoints will return 503 NOT_CONFIGURED")
 	}

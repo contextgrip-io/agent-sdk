@@ -23,6 +23,7 @@ tags:
   - name: chat
   - name: conversations
   - name: tokens
+  - name: training
   - name: system
 
 paths:
@@ -170,6 +171,122 @@ paths:
                 type: object
                 properties: { deleted: { type: boolean, const: true } }
         "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/v1/messages/{id}/eval:
+    post:
+      tags: [training]
+      summary: Rate an assistant answer (good/bad); writes a training record.
+      description: >
+        Explicit evals bypass the capture toggle — the caller deliberately
+        asked to keep this record. Upserts by message id: rating the same
+        answer again updates the verdict. Only assistant messages that carry
+        SQL can be rated.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [verdict]
+              properties:
+                verdict: { type: string, enum: [good, bad] }
+      responses:
+        "200":
+          description: Recorded
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { recorded: { type: boolean, const: true } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/v1/training/capture:
+    get:
+      tags: [training]
+      summary: Read the automatic-capture setting.
+      responses:
+        "200":
+          description: Setting
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TrainingCapture" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    put:
+      tags: [training]
+      summary: Enable/disable automatic capture (admin — primary APP_ACCESS_TOKEN only).
+      description: >
+        When enabled (the default), every completed chat exchange is recorded
+        as a training record (question as intent, generated SQL, bounded
+        result summary or execution error). Explicit evals are recorded
+        regardless of this setting.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TrainingCapture" }
+      responses:
+        "200":
+          description: Updated setting
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TrainingCapture" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/AdminRequired" }
+
+  /api/v1/training/stats:
+    get:
+      tags: [training]
+      summary: Training-record counts and capture range.
+      responses:
+        "200":
+          description: Stats
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TrainingStats" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/v1/training/export:
+    get:
+      tags: [training]
+      summary: Dump training records as JSONL (newline-delimited JSON).
+      description: >
+        Streams one TrainingExportLine JSON object per line
+        (application/x-ndjson). The line format is compatible with
+        ContextGrip's training-data export, so dumps from both sources merge
+        downstream without transformation. The stream stops at a 64 MiB byte
+        budget; compare line count with /api/v1/training/stats to detect
+        truncation. Query params: includeRows (default true) includes bounded
+        result row samples; evaluatedOnly (default false) restricts to
+        records with an eval verdict.
+      parameters:
+        - { name: includeRows, in: query, schema: { type: boolean, default: true } }
+        - { name: evaluatedOnly, in: query, schema: { type: boolean, default: false } }
+      responses:
+        "200":
+          description: JSONL stream
+          content:
+            application/x-ndjson:
+              schema: { $ref: "#/components/schemas/TrainingExportLine" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/v1/training/records:
+    delete:
+      tags: [training]
+      summary: Delete ALL training records (admin — primary APP_ACCESS_TOKEN only).
+      responses:
+        "200":
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { deleted: { type: integer, description: Number of records removed } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/AdminRequired" }
 
   /api/v1/tokens:
     get:
@@ -365,6 +482,64 @@ components:
         result: { $ref: "#/components/schemas/ResultSummary" }
         error: { type: string }
         createdAt: { type: string, format: date-time }
+
+    TrainingCapture:
+      type: object
+      required: [enabled]
+      properties:
+        enabled: { type: boolean }
+
+    TrainingStats:
+      type: object
+      required: [records, evaluated]
+      properties:
+        records: { type: integer }
+        evaluated: { type: integer, description: Records carrying an eval verdict }
+        firstCapturedAt: { type: string, format: date-time }
+        lastCapturedAt: { type: string, format: date-time }
+
+    TrainingExportLine:
+      type: object
+      description: One JSONL line. Field layout matches ContextGrip's training export.
+      required: [id, capturedAt, connection, context, query, response]
+      properties:
+        id: { type: string }
+        capturedAt: { type: string, format: date-time }
+        connection:
+          type: object
+          required: [id, name, engine]
+          properties:
+            id: { type: string, description: Stable non-secret hash of host:port/dbname }
+            name: { type: string, description: Database name from DATABASE_URL }
+            engine: { type: string, const: postgresql }
+        context:
+          type: object
+          properties:
+            session: { type: string, description: "\"chat\" (SSE) or \"ask\" (one-shot)" }
+            sourceMessageId: { type: string, description: Assistant message id, for dedupe }
+        query:
+          type: object
+          required: [sql]
+          properties:
+            sql: { type: string }
+            intent: { type: string, description: The natural-language question }
+        response:
+          type: object
+          required: [rowCount, truncated, executionTimeMs]
+          properties:
+            columns: { type: array, items: { type: string } }
+            rowCount: { type: integer }
+            truncated: { type: boolean }
+            executionTimeMs: { type: integer }
+            error: { type: string }
+            rowSample:
+              type: array
+              items: { type: array, items: {} }
+        eval:
+          type: object
+          required: [verdict]
+          properties:
+            verdict: { type: string, enum: [good, bad] }
 
     TokenInfo:
       type: object

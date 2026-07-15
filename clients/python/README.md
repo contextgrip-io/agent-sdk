@@ -85,6 +85,38 @@ for message in detail.messages:
 client.delete_conversation(conversation_id)
 ```
 
+## Training data
+
+Rate answers, control automatic capture, and stream the JSONL export. The
+export line format matches ContextGrip's training-data export, so dumps from
+both sources merge downstream without transformation.
+
+```python
+# rate an assistant answer (writes a training record, bypasses the capture toggle)
+client.rate_message(response.assistant_message_id, "good")
+
+# automatic capture of every completed exchange (set is admin-only)
+if not client.get_training_capture():
+    client.set_training_capture(True)
+
+stats = client.training_stats()
+print(f"{stats.records} records, {stats.evaluated} evaluated")
+
+# stream the export as parsed TrainingExportLine objects (NDJSON under the hood)
+exported = 0
+for line in client.iter_training_export(include_rows=True, evaluated_only=False):
+    verdict = line.eval.verdict if line.eval else None
+    print(line.id, line.query.intent, "->", line.query.sql, verdict)
+    exported += 1
+
+# the server stops the stream at a 64 MiB budget — compare with stats
+if exported < stats.records:
+    print("export truncated")
+
+# wipe all training records (admin-only)
+deleted = client.delete_training_records()
+```
+
 ## Token admin (primary `APP_ACCESS_TOKEN` only)
 
 ```python

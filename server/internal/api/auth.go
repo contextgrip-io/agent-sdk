@@ -59,11 +59,12 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// requireAdmin restricts token management to the primary APP_ACCESS_TOKEN.
+// requireAdmin restricts admin operations (token management, training
+// capture/deletion) to the primary APP_ACCESS_TOKEN.
 func (s *Server) requireAdmin(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if roleFrom(r.Context()) != rolePrimary {
-			writeError(w, http.StatusForbidden, "ADMIN_REQUIRED", "token management requires the primary access token")
+			writeError(w, http.StatusForbidden, "ADMIN_REQUIRED", "this operation requires the primary access token")
 			return
 		}
 		next.ServeHTTP(w, r)

@@ -18,6 +18,8 @@ internal/dbx/         lazy pgxpool, static read-only verifier, READ ONLY
 internal/chatstore/   SQLite conversation store (WAL, busy_timeout)
 internal/tokenstore/  SQLite named-token store (SHA-256 at rest); may share
                       the chatstore's DB file
+internal/trainingstore/ SQLite training-record store (capture toggle +
+                      records; same shared DB file)
 internal/textutil/    UTF-8 truncation + result-cell bounding helpers
 internal/webui/       go:embed of dist/ with SPA fallback (placeholder page
                       committed; Docker copies the real UI build in)
@@ -32,7 +34,7 @@ internal/webui/       go:embed of dist/ with SPA fallback (placeholder page
 | `APP_ACCESS_TOKEN` | — | Primary bearer token, and the only token that can manage named tokens. Required — the server refuses to start without it unless `AI_CHAT_DEV_NO_AUTH=1`. |
 | `PORT` | `8080` | Listen port. |
 | `AI_CHAT_MODEL` | `claude-opus-4-8` | Anthropic model id. |
-| `AI_CHAT_DB_PATH` | `./data/ai-chat.sqlite` | SQLite file for conversations + tokens. |
+| `AI_CHAT_DB_PATH` | `./data/ai-chat.sqlite` | SQLite file for conversations + tokens + training records. |
 | `AI_CHAT_ANTHROPIC_BASE_URL` | — | Anthropic endpoint override (`ANTHROPIC_BASE_URL` also honored). |
 | `AI_CHAT_DEV_NO_AUTH` | — | `1` disables auth. Local development only. |
 
@@ -47,6 +49,25 @@ go vet ./... && gofmt -l ./cmd ./internal
 Health endpoints (`/healthz`, `/readyz`), `/metrics` (hand-rolled Prometheus
 text), and the static UI are unauthenticated; everything under `/api/v1`
 requires `Authorization: Bearer <token>`.
+
+## Training data
+
+Completed exchanges are captured as training records **by default**
+(`GET/PUT /api/v1/training/capture` reads/toggles the setting; the PUT is
+admin-only). Each record holds the question as intent, the generated SQL, and
+the bounded result summary or execution error, keyed by the assistant message
+id. Answers can be rated explicitly with
+`POST /api/v1/messages/{id}/eval {"verdict": "good"|"bad"}` — evals bypass
+the capture toggle and upsert by message id (re-rating updates the verdict).
+
+`GET /api/v1/training/export?includeRows&evaluatedOnly` streams the records
+as JSONL (`application/x-ndjson`), oldest first, stopping at a 64 MiB budget
+(compare line count with `GET /api/v1/training/stats` to detect truncation).
+The line format matches ContextGrip's training export so dumps merge
+downstream without transformation; connection identity is a non-secret hash
+of `host:port/dbname` plus the database name — never credentials.
+`DELETE /api/v1/training/records` (admin-only) wipes all records and returns
+the count.
 
 ## Security model (layered)
 

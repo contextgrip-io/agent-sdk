@@ -17,6 +17,7 @@ import {
 import { Composer } from './components/Composer';
 import { MessageList } from './components/MessageList';
 import { SignIn } from './components/SignIn';
+import { TrainingPanel } from './components/TrainingPanel';
 
 const TOKEN_KEY = 'ai_chat_token';
 
@@ -37,6 +38,7 @@ export default function App() {
   const [messages, setMessages] = useState<UiMessage[]>([]);
   const [loadingThread, setLoadingThread] = useState(false);
   const [streaming, setStreaming] = useState(false);
+  const [showTraining, setShowTraining] = useState(false);
   // The id the streaming request was started under can go stale if the user
   // switches conversations mid-stream; track the active thread with a ref.
   const activeThreadRef = useRef<string | null>(null);
@@ -191,6 +193,9 @@ export default function App() {
                 }))
               : patchAssistant((m) => ({ ...m, result })),
           onDelta: (text) => patchAssistant((m) => ({ ...m, text: (m.text ?? '') + text })),
+          onDone: ({ assistantMessageId }) =>
+            // Adopt the real message id so the answer becomes ratable.
+            patchAssistant((m) => ({ ...m, serverId: assistantMessageId })),
           onError: (message) => patchAssistant((m) => ({ ...m, error: message })),
         },
       );
@@ -220,9 +225,14 @@ export default function App() {
           <h1>ContextGrip AI Chat</h1>
           <span className="model-chip">{status.model}</span>
         </div>
-        <button type="button" className="ghost-btn" onClick={() => signOut()}>
-          Sign out
-        </button>
+        <div className="header-actions">
+          <button type="button" className="ghost-btn" onClick={() => setShowTraining((v) => !v)}>
+            Training data
+          </button>
+          <button type="button" className="ghost-btn" onClick={() => signOut()}>
+            Sign out
+          </button>
+        </div>
       </header>
 
       {!status.ready && (
@@ -232,6 +242,8 @@ export default function App() {
           questions can be answered. You can still browse existing conversations.
         </div>
       )}
+
+      {showTraining && <TrainingPanel token={auth.token} onApiError={handleApiFailure} />}
 
       <div className="toolbar">
         <select
@@ -258,7 +270,7 @@ export default function App() {
         )}
       </div>
 
-      <MessageList messages={messages} loading={loadingThread} />
+      <MessageList messages={messages} loading={loadingThread} token={auth.token} />
 
       <Composer disabled={streaming} onSend={(q) => void send(q)} />
 
