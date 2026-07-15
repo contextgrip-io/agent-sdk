@@ -13,25 +13,33 @@ import (
 type conversationView struct {
 	ID        string `json:"id"`
 	Title     string `json:"title"`
+	Mode      string `json:"mode"`
 	CreatedAt string `json:"createdAt"`
 	UpdatedAt string `json:"updatedAt"`
 }
 
 // messageView matches the Message schema.
 type messageView struct {
-	ID        string                   `json:"id"`
-	Role      string                   `json:"role"`
-	Text      string                   `json:"text,omitempty"`
-	SQL       string                   `json:"sql,omitempty"`
-	Result    *chatstore.ResultSummary `json:"result,omitempty"`
-	Error     string                   `json:"error,omitempty"`
-	CreatedAt string                   `json:"createdAt"`
+	ID                string                   `json:"id"`
+	Role              string                   `json:"role"`
+	Text              string                   `json:"text,omitempty"`
+	SQL               string                   `json:"sql,omitempty"`
+	Result            *chatstore.ResultSummary `json:"result,omitempty"`
+	Error             string                   `json:"error,omitempty"`
+	Steps             []chatstore.Step         `json:"steps,omitempty"`
+	PendingApprovalID string                   `json:"pendingApprovalId,omitempty"`
+	CreatedAt         string                   `json:"createdAt"`
 }
 
 func toConversationView(conv chatstore.Conversation) conversationView {
+	mode := conv.Mode
+	if mode == "" {
+		mode = "chat"
+	}
 	return conversationView{
 		ID:        conv.ID,
 		Title:     conv.Title,
+		Mode:      mode,
 		CreatedAt: conv.CreatedAt.UTC().Format(time.RFC3339Nano),
 		UpdatedAt: conv.UpdatedAt.UTC().Format(time.RFC3339Nano),
 	}
@@ -39,13 +47,15 @@ func toConversationView(conv chatstore.Conversation) conversationView {
 
 func toMessageView(msg chatstore.Message) messageView {
 	return messageView{
-		ID:        msg.ID,
-		Role:      msg.Role,
-		Text:      msg.Text,
-		SQL:       msg.SQL,
-		Result:    msg.Result,
-		Error:     msg.Error,
-		CreatedAt: msg.CreatedAt.UTC().Format(time.RFC3339Nano),
+		ID:                msg.ID,
+		Role:              msg.Role,
+		Text:              msg.Text,
+		SQL:               msg.SQL,
+		Result:            msg.Result,
+		Error:             msg.Error,
+		Steps:             msg.Steps,
+		PendingApprovalID: msg.PendingApprovalID,
+		CreatedAt:         msg.CreatedAt.UTC().Format(time.RFC3339Nano),
 	}
 }
 

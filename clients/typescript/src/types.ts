@@ -5,6 +5,9 @@
  * file is the source of truth for this contract.
  */
 
+/** An enabled surface from `AI_CHAT_FEATURES`. */
+export type Feature = 'chat' | 'agent' | 'board';
+
 /** Response of `GET /api/v1/status`. */
 export interface Status {
   version: string;
@@ -13,6 +16,10 @@ export interface Status {
   /** Query engine; currently always `"postgresql"`. */
   engine: string;
   ready: boolean;
+  /** Enabled surfaces from `AI_CHAT_FEATURES`. */
+  features: Feature[];
+  /** True when `AI_CHAT_WRITE_DATABASE_URL` is configured — approvals can execute. */
+  writesEnabled: boolean;
 }
 
 /** Request body for `POST /api/v1/ask` and `POST /api/v1/messages`. */
@@ -21,6 +28,13 @@ export interface AskRequest {
   question: string;
   /** Continue an existing conversation; omit to start a new one. */
   conversationId?: string;
+  /**
+   * `agent` lets the model take multiple tool steps (read-only queries run
+   * automatically; writes become approvals). Requires the `"agent"`
+   * feature; a conversation keeps the mode of its first message.
+   * Server default: `chat`.
+   */
+  mode?: 'chat' | 'agent';
 }
 
 /** Summary of an executed query's result. */
@@ -34,18 +48,86 @@ export interface ResultSummary {
   executionTimeMs: number;
 }
 
+/** One completed agent tool step. */
+export interface Step {
+  index: number;
+  kind: 'query' | 'schema' | 'note';
+  /** One-line description of the step. */
+  summary: string;
+  /** The read-only SQL this step executed (kind `query`). */
+  sql?: string;
+  result?: ResultSummary;
+  /** Step execution error. */
+  error?: string;
+}
+
+/** A proposed write awaiting (or carrying) a decision. */
+export interface Approval {
+  id: string;
+  /** The exact statement that will run if approved. */
+  sql: string;
+  /** The model's stated reason for the write. */
+  rationale?: string;
+  status: 'pending' | 'approved' | 'rejected';
+  /** Where the proposal came from (exactly one of the ids is set). */
+  source: {
+    conversationId?: string;
+    messageId?: string;
+    taskId?: string;
+  };
+  createdAt: string;
+  decidedAt?: string;
+}
+
+/** Response of `POST /api/v1/approvals/{id}`. */
+export interface ApprovalDecisionResult {
+  approval: Approval;
+  /** Execution outcome when the approved write succeeded. */
+  result?: ResultSummary;
+  /** Execution error when the approved write failed. */
+  error?: string;
+}
+
+/** Lifecycle state of a board task. */
+export type TaskStatus = 'queued' | 'running' | 'needs_approval' | 'done' | 'failed' | 'canceled';
+
+/** One board task. */
+export interface Task {
+  id: string;
+  title: string;
+  prompt: string;
+  status: TaskStatus;
+  createdAt: string;
+  updatedAt: string;
+  /** Final answer when done. */
+  answer?: string;
+  /** Failure reason when failed. */
+  error?: string;
+}
+
+/** Response of `GET /api/v1/tasks/{id}`. */
+export interface TaskDetail {
+  task: Task;
+  steps: Step[];
+  pendingApproval?: Approval;
+}
+
 /** Response of `POST /api/v1/ask`. */
 export interface AskResponse {
   conversationId: string;
   userMessageId: string;
   assistantMessageId: string;
-  /** The generated read-only SQL (always shown). */
-  sql: string;
+  /** The generated read-only SQL (chat mode; agent mode may carry `steps` instead). */
+  sql?: string;
   result?: ResultSummary;
   /** Set instead of `result` when query execution failed. */
   resultError?: string;
   /** Natural-language explanation of the outcome. */
   answer: string;
+  /** Agent-mode tool steps, in execution order. */
+  steps?: Step[];
+  /** Set when the turn ended awaiting a write approval. */
+  pendingApprovalId?: string;
 }
 
 /** One conversation in `GET /api/v1/conversations`. */
@@ -53,6 +135,8 @@ export interface Conversation {
   id: string;
   /** Derived from the first question, max 80 chars. */
   title: string;
+  /** Fixed by the conversation's first message. */
+  mode: 'chat' | 'agent';
   createdAt: string;
   updatedAt: string;
 }
@@ -65,6 +149,10 @@ export interface Message {
   sql?: string;
   result?: ResultSummary;
   error?: string;
+  /** Agent-mode tool steps persisted with the message. */
+  steps?: Step[];
+  /** Set while this message's proposed write awaits a decision. */
+  pendingApprovalId?: string;
   createdAt: string;
 }
 
@@ -159,7 +247,10 @@ export interface TrainingExportOptions {
  * SSE event payloads for `POST /api/v1/messages`.
  *
  * Event sequence: meta -> sql -> result -> delta* -> done, or a terminal
- * `error` event at any point after headers are sent.
+ * `error` event at any point after headers are sent. In agent mode,
+ * `step` and `approval_required` events are interleaved before the delta
+ * stream, and the sql/result pair may be absent (steps carry the queries
+ * instead).
  */
 
 /** Payload of the `meta` event. */
@@ -195,6 +286,8 @@ export interface StreamDeltaEvent {
 export interface StreamDoneEvent {
   conversationId: string;
   assistantMessageId: string;
+  /** Set when the turn ended awaiting a write approval (agent mode). */
+  pendingApprovalId?: string;
 }
 
 /** Payload of the terminal `error` event. */
@@ -213,6 +306,14 @@ export interface StreamHandlers {
   onMeta?: (meta: StreamMetaEvent) => void;
   onSql?: (sql: string) => void;
   onResult?: (result: StreamResultEvent) => void;
+  /** Agent mode: one call per completed tool step, in order. */
+  onStep?: (step: Step) => void;
+  /**
+   * Agent mode: the model proposed a write. The turn ends after this —
+   * `done` carries `pendingApprovalId` — and the write executes only via
+   * {@link AiChatClient.decideApproval}.
+   */
+  onApprovalRequired?: (approval: Approval) => void;
   onDelta?: (text: string) => void;
   onDone?: (done: StreamDoneEvent) => void;
   /**

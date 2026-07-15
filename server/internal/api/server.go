@@ -11,9 +11,11 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/contextgrip-io/agent-sdk/server/internal/approvalstore"
 	"github.com/contextgrip-io/agent-sdk/server/internal/assistant"
 	"github.com/contextgrip-io/agent-sdk/server/internal/chatstore"
 	"github.com/contextgrip-io/agent-sdk/server/internal/dbx"
+	"github.com/contextgrip-io/agent-sdk/server/internal/taskstore"
 	"github.com/contextgrip-io/agent-sdk/server/internal/tokenstore"
 	"github.com/contextgrip-io/agent-sdk/server/internal/trainingstore"
 	"github.com/contextgrip-io/agent-sdk/server/internal/webui"
@@ -52,10 +54,20 @@ type Config struct {
 	// ModelID is reported by /api/v1/status even when Model is nil.
 	ModelID string
 	// DB is nil when DATABASE_URL is not configured.
-	DB       Database
-	Chat     *chatstore.Store
-	Tokens   *tokenstore.Store
-	Training *trainingstore.Store
+	DB        Database
+	Chat      *chatstore.Store
+	Tokens    *tokenstore.Store
+	Training  *trainingstore.Store
+	Approvals *approvalstore.Store
+	Tasks     *taskstore.Store
+	// WriteDB is nil when AI_CHAT_WRITE_DATABASE_URL is not configured;
+	// approvals can then only be rejected (approve -> 409 WRITES_DISABLED).
+	WriteDB WriteExecutor
+	// Features are the enabled surfaces from AI_CHAT_FEATURES ("chat" is
+	// always present). Empty enables every surface.
+	Features []string
+	// AgentMaxSteps bounds tool steps per agent run (0 = default 8).
+	AgentMaxSteps int
 	// ConnectionID/ConnectionName tag training-export lines: a stable
 	// non-secret hash of host:port/dbname and the database name, derived
 	// from DATABASE_URL via dbx.ConnectionIdentity. Never credentials.
@@ -71,14 +83,70 @@ type Config struct {
 
 // Server is the http.Handler for the whole service.
 type Server struct {
-	cfg     Config
-	metrics *metrics
-	router  chi.Router
+	cfg      Config
+	metrics  *metrics
+	router   chi.Router
+	taskWake chan struct{}
+}
+
+// AllFeatures is the default AI_CHAT_FEATURES value.
+var AllFeatures = []string{"chat", "agent", "board"}
+
+// ParseFeatures normalizes an AI_CHAT_FEATURES value: a comma-separated
+// subset of chat|agent|board. Unknown entries are dropped, "chat" is always
+// implied, and empty input enables everything.
+func ParseFeatures(raw string) []string {
+	if strings.TrimSpace(raw) == "" {
+		return append([]string(nil), AllFeatures...)
+	}
+	enabled := map[string]bool{"chat": true}
+	for _, part := range strings.Split(raw, ",") {
+		name := strings.ToLower(strings.TrimSpace(part))
+		switch name {
+		case "chat", "agent", "board":
+			enabled[name] = true
+		}
+	}
+	out := make([]string, 0, len(AllFeatures))
+	for _, name := range AllFeatures {
+		if enabled[name] {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
+// featureEnabled reports whether a surface is enabled on this instance.
+func (s *Server) featureEnabled(name string) bool {
+	features := s.cfg.Features
+	if len(features) == 0 {
+		features = AllFeatures
+	}
+	for _, f := range features {
+		if f == name {
+			return true
+		}
+	}
+	return false
+}
+
+// requireFeature guards a route subtree behind an AI_CHAT_FEATURES surface.
+func (s *Server) requireFeature(name string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if !s.featureEnabled(name) {
+				writeError(w, http.StatusForbidden, "FEATURE_DISABLED",
+					"the "+name+" feature is not enabled on this instance (AI_CHAT_FEATURES)")
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
 }
 
 // New builds the router.
 func New(cfg Config) *Server {
-	s := &Server{cfg: cfg, metrics: newMetrics()}
+	s := &Server{cfg: cfg, metrics: newMetrics(), taskWake: make(chan struct{}, 1)}
 
 	r := chi.NewRouter()
 	r.Use(s.metricsMiddleware)
@@ -104,6 +172,16 @@ func New(cfg Config) *Server {
 		r.Get("/conversations", s.handleListConversations)
 		r.Get("/conversations/{id}", s.handleGetConversation)
 		r.Delete("/conversations/{id}", s.handleDeleteConversation)
+		r.Get("/approvals", s.handleListApprovals)
+		r.Post("/approvals/{id}", s.handleDecideApproval)
+		r.Route("/tasks", func(r chi.Router) {
+			r.Use(s.requireFeature("board"))
+			r.Get("/", s.handleListTasks)
+			r.Post("/", s.handleCreateTask)
+			r.Get("/{id}", s.handleGetTask)
+			r.Delete("/{id}", s.handleDeleteTask)
+			r.Post("/{id}/cancel", s.handleCancelTask)
+		})
 		r.Route("/training", func(r chi.Router) {
 			r.Get("/capture", s.handleGetTrainingCapture)
 			r.With(s.requireAdmin).Put("/capture", s.handleSetTrainingCapture)

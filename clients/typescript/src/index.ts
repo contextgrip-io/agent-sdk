@@ -6,12 +6,15 @@
  */
 
 import type {
+  Approval,
+  ApprovalDecisionResult,
   AskRequest,
   AskResponse,
   Conversation,
   ConversationDetail,
   CreatedToken,
   Status,
+  Step,
   StreamDeltaEvent,
   StreamDoneEvent,
   StreamErrorEvent,
@@ -19,6 +22,9 @@ import type {
   StreamMetaEvent,
   StreamResultEvent,
   StreamSqlEvent,
+  Task,
+  TaskDetail,
+  TaskStatus,
   TokenInfo,
   TrainingCapture,
   TrainingExportLine,
@@ -54,7 +60,9 @@ export class AiChatError extends Error {
   /**
    * Stable machine slug from the error body. Known values: UNAUTHORIZED,
    * ADMIN_REQUIRED, VALIDATION, NOT_FOUND, NOT_CONFIGURED,
-   * CONVERSATION_FULL, STORE_ERROR, MODEL_ERROR, STREAM_UNSUPPORTED.
+   * CONVERSATION_FULL, STORE_ERROR, MODEL_ERROR, STREAM_UNSUPPORTED,
+   * FEATURE_DISABLED, WRITES_DISABLED, ALREADY_DECIDED, TASK_ACTIVE,
+   * TASK_FINISHED.
    */
   readonly code?: string;
 
@@ -116,6 +124,12 @@ function dispatchFrame(frameText: string, handlers: StreamHandlers): void {
     }
     case 'result':
       handlers.onResult?.(payload as StreamResultEvent);
+      break;
+    case 'step':
+      handlers.onStep?.(payload as Step);
+      break;
+    case 'approval_required':
+      handlers.onApprovalRequired?.(payload as Approval);
       break;
     case 'delta': {
       const { text } = payload as StreamDeltaEvent;
@@ -261,6 +275,53 @@ export class AiChatClient {
     await this.#json('DELETE', `/api/v1/conversations/${encodeURIComponent(id)}`);
   }
 
+  /** `GET /api/v1/approvals` — list pending write approvals (chat and board sources). */
+  listApprovals(): Promise<Approval[]> {
+    return this.#json('GET', '/api/v1/approvals');
+  }
+
+  /**
+   * `POST /api/v1/approvals/{id}` — approve or reject a proposed write.
+   * Approving executes the exact proposed SQL against the write connection
+   * in a single transaction and returns the execution outcome. Decisions
+   * are idempotent-once: deciding an already-decided approval rejects with
+   * {@link AiChatError} code `ALREADY_DECIDED`; without a configured write
+   * connection, approval rejects with code `WRITES_DISABLED` (both 409).
+   */
+  decideApproval(id: string, decision: 'approve' | 'reject'): Promise<ApprovalDecisionResult> {
+    return this.#json('POST', `/api/v1/approvals/${encodeURIComponent(id)}`, { decision });
+  }
+
+  /** `POST /api/v1/tasks` — file a task for the agent (requires the `"board"` feature). */
+  createTask(title: string, prompt: string): Promise<Task> {
+    return this.#json('POST', '/api/v1/tasks', { title, prompt });
+  }
+
+  /** `GET /api/v1/tasks` — list board tasks, most recently updated first. */
+  listTasks(status?: TaskStatus): Promise<Task[]> {
+    const query = status === undefined ? '' : `?status=${encodeURIComponent(status)}`;
+    return this.#json('GET', `/api/v1/tasks${query}`);
+  }
+
+  /** `GET /api/v1/tasks/{id}` — status, transcript steps, answer, pending approval. */
+  getTask(id: string): Promise<TaskDetail> {
+    return this.#json('GET', `/api/v1/tasks/${encodeURIComponent(id)}`);
+  }
+
+  /** `POST /api/v1/tasks/{id}/cancel` — cancel a queued, running, or approval-blocked task. */
+  cancelTask(id: string): Promise<Task> {
+    return this.#json('POST', `/api/v1/tasks/${encodeURIComponent(id)}/cancel`);
+  }
+
+  /**
+   * `DELETE /api/v1/tasks/{id}` — delete a finished task
+   * (done/failed/canceled only; a still-active task rejects with
+   * {@link AiChatError} code `TASK_ACTIVE`).
+   */
+  async deleteTask(id: string): Promise<void> {
+    await this.#json('DELETE', `/api/v1/tasks/${encodeURIComponent(id)}`);
+  }
+
   /**
    * `POST /api/v1/messages/{id}/eval` — rate an assistant answer
    * (good/bad); writes a training record. Explicit evals bypass the
@@ -295,9 +356,10 @@ export class AiChatClient {
   /**
    * `GET /api/v1/training/export` — stream training records as JSONL
    * (newline-delimited JSON), yielding one parsed {@link TrainingExportLine}
-   * per line. Blank lines are skipped; an incomplete final line (the server
-   * stops at a 64 MiB byte budget — compare the line count with
-   * `trainingStats()` to detect truncation) is skipped rather than raised.
+   * per line. Blank lines are skipped. The server enforces its 64 MiB
+   * export byte budget on whole lines (compare the line count with
+   * `trainingStats()` to detect truncation), so a line that fails to parse
+   * indicates corruption and throws rather than silently dropping a record.
    *
    * The request is made lazily on first iteration; a non-2xx response
    * rejects the first `next()` with {@link AiChatError}. Breaking out of

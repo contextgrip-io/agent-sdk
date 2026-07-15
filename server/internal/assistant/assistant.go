@@ -61,6 +61,10 @@ type Client interface {
 	Model() string
 	GenerateSQL(ctx context.Context, in GenerateSQLInput) (string, error)
 	StreamAnswer(ctx context.Context, in AnswerInput, emit func(delta string) error) (string, error)
+	// AgentTurn runs one agent-mode model turn: given the prompt and the
+	// tool exchanges so far, the model either requests one more tool call
+	// or finishes with a plain-text answer.
+	AgentTurn(ctx context.Context, in AgentTurnInput) (*AgentTurnOutput, error)
 }
 
 // ── Anthropic implementation ────────────────────────────────────────────────

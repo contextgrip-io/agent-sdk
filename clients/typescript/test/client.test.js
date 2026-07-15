@@ -115,7 +115,14 @@ test('status() hits GET /api/v1/status; no auth header without a token', async (
   let seen;
   const stub = await startStub((req, res) => {
     seen = { method: req.method, url: req.url, authorization: req.headers.authorization };
-    sendJson(res, 200, { version: '0.1.0', model: 'claude-opus-4-8', engine: 'postgresql', ready: true });
+    sendJson(res, 200, {
+      version: '0.1.0',
+      model: 'claude-opus-4-8',
+      engine: 'postgresql',
+      ready: true,
+      features: ['chat', 'agent', 'board'],
+      writesEnabled: false,
+    });
   });
   try {
     const client = new AiChatClient({ baseUrl: stub.url });
@@ -123,7 +130,14 @@ test('status() hits GET /api/v1/status; no auth header without a token', async (
     assert.equal(seen.method, 'GET');
     assert.equal(seen.url, '/api/v1/status');
     assert.equal(seen.authorization, undefined);
-    assert.deepEqual(status, { version: '0.1.0', model: 'claude-opus-4-8', engine: 'postgresql', ready: true });
+    assert.deepEqual(status, {
+      version: '0.1.0',
+      model: 'claude-opus-4-8',
+      engine: 'postgresql',
+      ready: true,
+      features: ['chat', 'agent', 'board'],
+      writesEnabled: false,
+    });
   } finally {
     await stub.close();
   }

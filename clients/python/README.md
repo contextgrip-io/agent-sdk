@@ -72,6 +72,66 @@ with Client(base_url="http://localhost:8080", token="...") as client:
                 print("stream error:", event.message)
 ```
 
+## Agent mode and write approvals
+
+With the `agent` feature enabled (`client.status().features`), pass
+`mode="agent"` to let the model take multiple tool steps: read-only queries
+run automatically as `StepEvent`s, and proposed writes never execute
+directly — the turn ends with an `ApprovalRequiredEvent`, the `DoneEvent`
+carries `pending_approval_id`, and the write only runs when you approve it.
+
+```python
+from contextgrip_ai_chat import (
+    ApprovalRequiredEvent, Client, DeltaEvent, DoneEvent, StepEvent,
+)
+
+with Client(base_url="http://localhost:8080", token="...") as client:
+    for event in client.stream_message("Mark order 7 as shipped", mode="agent"):
+        match event:
+            case StepEvent():
+                print(f"step {event.step.index} [{event.step.kind}]: {event.step.summary}")
+            case ApprovalRequiredEvent():
+                print("proposed write:", event.approval.sql)
+                print("rationale:", event.approval.rationale)
+            case DeltaEvent():
+                print(event.text, end="", flush=True)
+            case DoneEvent() if event.pending_approval_id:
+                print("\nawaiting approval:", event.pending_approval_id)
+
+    # decide the pending write (executes only on approve; requires
+    # AI_CHAT_WRITE_DATABASE_URL on the server — writes_enabled in status)
+    for approval in client.list_approvals():
+        outcome = client.decide_approval(approval.id, "approve")  # or "reject"
+        if outcome.error is not None:
+            print("write failed:", outcome.error)
+        elif outcome.result is not None:
+            print(f"write ran in {outcome.result.execution_time_ms}ms")
+```
+
+`ask(..., mode="agent")` works too: the response may carry `steps` instead of
+the sql/result pair, plus `pending_approval_id` when a write awaits a
+decision. A conversation keeps the mode of its first message.
+
+## Board tasks
+
+With the `board` feature, file background tasks that run through the same
+agent loop, one at a time. Proposed writes pause a task in `needs_approval`;
+the approval decision resumes it.
+
+```python
+task = client.create_task("Weekly cleanup", "Archive orders older than a year")
+
+for t in client.list_tasks(status="needs_approval"):
+    detail = client.get_task(t.id)
+    for step in detail.steps:
+        print(step.index, step.kind, step.summary)
+    if detail.pending_approval is not None:
+        client.decide_approval(detail.pending_approval.id, "approve")
+
+client.cancel_task(task.id)   # queued/running/needs_approval only (409 TASK_FINISHED otherwise)
+client.delete_task(task.id)   # done/failed/canceled only (409 TASK_ACTIVE otherwise)
+```
+
 ## Conversations
 
 ```python
@@ -145,7 +205,8 @@ except AiChatError as exc:
 
 Known codes: `UNAUTHORIZED`, `ADMIN_REQUIRED`, `VALIDATION`, `NOT_FOUND`,
 `NOT_CONFIGURED`, `CONVERSATION_FULL`, `STORE_ERROR`, `MODEL_ERROR`,
-`STREAM_UNSUPPORTED`.
+`STREAM_UNSUPPORTED`, `FEATURE_DISABLED`, `WRITES_DISABLED`,
+`ALREADY_DECIDED`, `TASK_ACTIVE`, `TASK_FINISHED`.
 
 ## Development
 

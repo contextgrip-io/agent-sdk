@@ -13,16 +13,22 @@ import httpx
 from ._sse import iter_sse_frames, parse_stream_event
 from .errors import AiChatError
 from .models import (
+    Approval,
     AskResponse,
     Conversation,
     ConversationDetail,
     CreatedToken,
+    DecideApprovalResult,
     Status,
     StreamEvent,
+    Task,
+    TaskDetail,
     TokenInfo,
     TrainingExportLine,
     TrainingStats,
 )
+
+Mode = Literal["chat", "agent"]
 
 
 class Client:
@@ -77,33 +83,53 @@ class Client:
 
     # --- chat ---------------------------------------------------------------
 
-    def ask(self, question: str, conversation_id: str | None = None) -> AskResponse:
+    def ask(
+        self,
+        question: str,
+        conversation_id: str | None = None,
+        mode: Mode = "chat",
+    ) -> AskResponse:
         """One-shot question; blocks until the full answer is ready.
 
         A failed query execution is not an HTTP error: the returned
         ``AskResponse`` carries ``result_error`` and an ``answer``
         explaining the failure.
+
+        ``mode="agent"`` (requires the "agent" feature) lets the model take
+        multiple tool steps: the response may carry ``steps`` instead of the
+        sql/result pair, and ``pending_approval_id`` when a proposed write
+        awaits a decision. A conversation keeps the mode of its first
+        message.
         """
         payload = self._request_json(
-            "POST", "/api/v1/ask", json_body=_ask_body(question, conversation_id)
+            "POST",
+            "/api/v1/ask",
+            json_body=_ask_body(question, conversation_id, mode),
         )
         return AskResponse.from_dict(payload)
 
     def stream_message(
-        self, question: str, conversation_id: str | None = None
+        self,
+        question: str,
+        conversation_id: str | None = None,
+        mode: Mode = "chat",
     ) -> Iterator[StreamEvent]:
         """Ask a question and stream the answer as typed SSE events.
 
-        Yields ``MetaEvent -> SqlEvent -> ResultEvent -> DeltaEvent* ->
-        DoneEvent``, or a terminal ``ErrorEvent`` at any point after the
-        stream has started (yielded, not raised). Pre-stream failures
-        (validation, auth, unknown conversation) raise :class:`AiChatError`.
-        Malformed or unknown frames are skipped.
+        Chat mode yields ``MetaEvent -> SqlEvent -> ResultEvent ->
+        DeltaEvent* -> DoneEvent``, or a terminal ``ErrorEvent`` at any
+        point after the stream has started (yielded, not raised). In agent
+        mode ``StepEvent`` and ``ApprovalRequiredEvent`` are interleaved
+        before the delta stream, the sql/result pair may be absent, and
+        ``DoneEvent.pending_approval_id`` is set when the turn ended on a
+        proposed write. Pre-stream failures (validation, auth, unknown
+        conversation) raise :class:`AiChatError`. Malformed or unknown
+        frames are skipped.
         """
         with self._http.stream(
             "POST",
             "/api/v1/messages",
-            json=_ask_body(question, conversation_id),
+            json=_ask_body(question, conversation_id, mode),
             headers={"Accept": "text/event-stream"},
         ) as response:
             if not response.is_success:
@@ -133,6 +159,77 @@ class Client:
         self._request_json(
             "DELETE", f"/api/v1/conversations/{quote(conversation_id, safe='')}"
         )
+
+    # --- approvals ------------------------------------------------------------
+
+    def list_approvals(self) -> list[Approval]:
+        """List pending write approvals (chat and board sources)."""
+        payload = self._request_json("GET", "/api/v1/approvals")
+        return [Approval.from_dict(item) for item in payload]
+
+    def decide_approval(
+        self, approval_id: str, decision: Literal["approve", "reject"]
+    ) -> DecideApprovalResult:
+        """Approve or reject a proposed write.
+
+        Approving executes the exact proposed SQL against the write
+        connection and the returned ``result``/``error`` carry the
+        execution outcome. Deciding an already-decided approval raises
+        :class:`AiChatError` with code ``ALREADY_DECIDED``; approving
+        without a configured write connection raises ``WRITES_DISABLED``
+        (both 409).
+        """
+        payload = self._request_json(
+            "POST",
+            f"/api/v1/approvals/{quote(approval_id, safe='')}",
+            json_body={"decision": decision},
+        )
+        return DecideApprovalResult.from_dict(payload)
+
+    # --- tasks ------------------------------------------------------------------
+
+    def create_task(self, title: str, prompt: str) -> Task:
+        """File a board task for the agent (requires the "board" feature)."""
+        payload = self._request_json(
+            "POST", "/api/v1/tasks", json_body={"title": title, "prompt": prompt}
+        )
+        return Task.from_dict(payload)
+
+    def list_tasks(self, status: str | None = None) -> list[Task]:
+        """List board tasks, most recently updated first.
+
+        ``status`` filters to one of: queued, running, needs_approval,
+        done, failed, canceled.
+        """
+        params = {"status": status} if status is not None else None
+        payload = self._request_json("GET", "/api/v1/tasks", params=params)
+        return [Task.from_dict(item) for item in payload]
+
+    def get_task(self, task_id: str) -> TaskDetail:
+        """Task detail: status, transcript steps, answer, pending approval."""
+        payload = self._request_json(
+            "GET", f"/api/v1/tasks/{quote(task_id, safe='')}"
+        )
+        return TaskDetail.from_dict(payload)
+
+    def cancel_task(self, task_id: str) -> Task:
+        """Cancel a queued, running, or approval-blocked task.
+
+        Canceling a finished task raises :class:`AiChatError` with code
+        ``TASK_FINISHED`` (409).
+        """
+        payload = self._request_json(
+            "POST", f"/api/v1/tasks/{quote(task_id, safe='')}/cancel"
+        )
+        return Task.from_dict(payload)
+
+    def delete_task(self, task_id: str) -> None:
+        """Delete a finished task (done/failed/canceled only).
+
+        Deleting an active task raises :class:`AiChatError` with code
+        ``TASK_ACTIVE`` (409).
+        """
+        self._request_json("DELETE", f"/api/v1/tasks/{quote(task_id, safe='')}")
 
     # --- training data --------------------------------------------------------
 
@@ -219,9 +316,13 @@ class Client:
     # --- internals ------------------------------------------------------------
 
     def _request_json(
-        self, method: str, path: str, json_body: dict[str, Any] | None = None
+        self,
+        method: str,
+        path: str,
+        json_body: dict[str, Any] | None = None,
+        params: dict[str, Any] | None = None,
     ) -> Any:
-        response = self._http.request(method, path, json=json_body)
+        response = self._http.request(method, path, json=json_body, params=params)
         if not response.is_success:
             raise self._error(response)
         return response.json()
@@ -246,8 +347,12 @@ class Client:
         return AiChatError(response.status_code, code, message)
 
 
-def _ask_body(question: str, conversation_id: str | None) -> dict[str, Any]:
+def _ask_body(
+    question: str, conversation_id: str | None, mode: Mode = "chat"
+) -> dict[str, Any]:
     body: dict[str, Any] = {"question": question}
     if conversation_id is not None:
         body["conversationId"] = conversation_id
+    if mode != "chat":  # chat is the server default; keep the wire minimal
+        body["mode"] = mode
     return body

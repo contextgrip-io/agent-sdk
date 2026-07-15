@@ -171,12 +171,35 @@ cd ui && npm install && npm run dev                  # UI on :5173, proxies /api
 CI builds the UI, embeds it, runs the Go suites, typechecks the UI and the
 TypeScript client, runs the Python client tests, and builds the Docker image.
 
+## The three surfaces — ready-to-run presets
+
+One binary and one image carry all three AI UIs; `AI_CHAT_FEATURES` picks the
+preset. All three are on by default.
+
+| Preset | Env | What you get |
+|---|---|---|
+| **AI Chat** | `AI_CHAT_FEATURES=chat` | Plain NL→SQL Q&A, strictly read-only. |
+| **AI Agentic Chat** | `AI_CHAT_FEATURES=chat,agent` | The chat plus agent mode: multi-step tool loops (read queries run automatically); proposed writes become approval cards. |
+| **AI Agent Board** | `AI_CHAT_FEATURES=chat,agent,board` (default) | Everything plus the task board: file work for the agent, watch it move Queued → Running → Needs approval → Done, automate via `/api/v1/tasks`. |
+
+Writes never execute from a feature flag alone: agent mode only *proposes*
+SQL, and an approval can execute it only when a separate write-capable
+connection is configured via `AI_CHAT_WRITE_DATABASE_URL`. Without it the app
+is read-only regardless of preset (`writesEnabled: false` in
+`/api/v1/status`).
+
+Additional env for these surfaces:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `AI_CHAT_FEATURES` | `chat,agent,board` | Enabled surfaces (comma-separated; `chat` is always implied). |
+| `AI_CHAT_WRITE_DATABASE_URL` | — | Optional write-capable connection used ONLY to execute approved writes. |
+| `AI_CHAT_AGENT_MAX_STEPS` | `8` | Tool-step budget per agent turn/task. |
+
 ## Roadmap
 
-- `template-ai-agent` — multi-step agentic chat with approval-gated writes.
-- `template-ai-board` — task board built on durable agent tasks, workflows,
-  and schedules (design aligned with the sibling
-  [PostGrip agent SDK protocol](https://github.com/postgrip-io/agent-sdk-protocol)).
+- Schedules for board tasks (recurring agent work), aligned with the sibling
+  [PostGrip agent SDK protocol](https://github.com/postgrip-io/agent-sdk-protocol).
 - Encrypted-at-rest conversation store.
 
 ## License

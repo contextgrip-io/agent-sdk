@@ -22,6 +22,8 @@ security:
 tags:
   - name: chat
   - name: conversations
+  - name: approvals
+  - name: tasks
   - name: tokens
   - name: training
   - name: system
@@ -111,8 +113,18 @@ paths:
           sql:    {"sql": string}
           result: ResultSummary, or {"error": string, "executionTimeMs": number} when execution failed
           delta:  {"text": string}
-          done:   {"conversationId": string, "assistantMessageId": string}
+          done:   {"conversationId": string, "assistantMessageId": string, "pendingApprovalId"?: string}
           error:  {"message": string}
+
+        Agent mode (AskRequest.mode = "agent", requires the "agent" feature):
+        the model may take multiple tool steps before answering. Additional
+        events, interleaved before the delta stream:
+          step:              Step (one per completed tool step, in order)
+          approval_required: Approval (a proposed write; the turn ends after
+                             this — done carries pendingApprovalId — and the
+                             write executes only via POST /api/v1/approvals/{id})
+        In agent mode the sql/result pair may be absent (steps carry the
+        queries instead).
       requestBody:
         required: true
         content:
@@ -171,6 +183,162 @@ paths:
                 type: object
                 properties: { deleted: { type: boolean, const: true } }
         "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/v1/approvals:
+    get:
+      tags: [approvals]
+      summary: List pending write approvals (chat and board sources).
+      responses:
+        "200":
+          description: Pending approvals
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Approval" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/v1/approvals/{id}:
+    post:
+      tags: [approvals]
+      summary: Approve or reject a proposed write.
+      description: >
+        Approving executes the exact proposed SQL against the write
+        connection (AI_CHAT_WRITE_DATABASE_URL) in a single transaction and
+        returns the execution outcome; if no write connection is configured,
+        approval fails with 409 WRITES_DISABLED. The decision is appended to
+        the source conversation, and a board task waiting on this approval
+        resumes automatically. Decisions are idempotent-once: deciding an
+        already-decided approval returns 409 ALREADY_DECIDED.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [decision]
+              properties:
+                decision: { type: string, enum: [approve, reject] }
+      responses:
+        "200":
+          description: Decision recorded (and executed, when approved)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [approval]
+                properties:
+                  approval: { $ref: "#/components/schemas/Approval" }
+                  result: { $ref: "#/components/schemas/ResultSummary" }
+                  error: { type: string, description: Execution error when the approved write failed }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: Already decided, or writes not configured (code ALREADY_DECIDED | WRITES_DISABLED)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /api/v1/tasks:
+    get:
+      tags: [tasks]
+      summary: List board tasks, most recently updated first.
+      parameters:
+        - name: status
+          in: query
+          schema: { type: string, enum: [queued, running, needs_approval, done, failed, canceled] }
+      responses:
+        "200":
+          description: Tasks
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Task" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    post:
+      tags: [tasks]
+      summary: File a task for the agent (requires the "board" feature).
+      description: >
+        Tasks run in the background through the same agent loop as agent-mode
+        chat, one at a time, oldest first. Proposed writes pause the task in
+        needs_approval; the approval decision resumes it.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title, prompt]
+              properties:
+                title: { type: string, maxLength: 200 }
+                prompt: { type: string, maxLength: 4000 }
+      responses:
+        "201":
+          description: Filed
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Task" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "503": { $ref: "#/components/responses/NotConfigured" }
+
+  /api/v1/tasks/{id}:
+    get:
+      tags: [tasks]
+      summary: Task detail — status, transcript steps, answer, pending approval.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Detail
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TaskDetail" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      tags: [tasks]
+      summary: Delete a finished task (done/failed/canceled only; 409 otherwise).
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { deleted: { type: boolean, const: true } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "409":
+          description: Task is still queued/running/needs_approval (code TASK_ACTIVE)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /api/v1/tasks/{id}/cancel:
+    post:
+      tags: [tasks]
+      summary: Cancel a queued, running, or approval-blocked task.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Canceled task
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Task" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: Already finished (code TASK_FINISHED)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
 
   /api/v1/messages/{id}/eval:
     post:
@@ -394,7 +562,9 @@ components:
           description: >
             Stable machine slug. Known values: UNAUTHORIZED, ADMIN_REQUIRED,
             VALIDATION, NOT_FOUND, NOT_CONFIGURED, CONVERSATION_FULL,
-            STORE_ERROR, MODEL_ERROR, STREAM_UNSUPPORTED.
+            STORE_ERROR, MODEL_ERROR, STREAM_UNSUPPORTED, FEATURE_DISABLED
+            (403 — surface not in AI_CHAT_FEATURES), WRITES_DISABLED,
+            ALREADY_DECIDED, TASK_ACTIVE, TASK_FINISHED.
 
     Readiness:
       type: object
@@ -406,12 +576,19 @@ components:
 
     Status:
       type: object
-      required: [version, model, engine, ready]
+      required: [version, model, engine, ready, features, writesEnabled]
       properties:
         version: { type: string }
         model: { type: string, description: Anthropic model id in use }
         engine: { type: string, const: postgresql }
         ready: { type: boolean }
+        features:
+          type: array
+          description: Enabled surfaces from AI_CHAT_FEATURES (chat, agent, board).
+          items: { type: string, enum: [chat, agent, board] }
+        writesEnabled:
+          type: boolean
+          description: True when AI_CHAT_WRITE_DATABASE_URL is configured — approvals can execute.
 
     AskRequest:
       type: object
@@ -421,20 +598,87 @@ components:
         conversationId:
           type: string
           description: Continue an existing conversation; omit to start a new one.
+        mode:
+          type: string
+          enum: [chat, agent]
+          default: chat
+          description: >
+            agent lets the model take multiple tool steps (read-only queries
+            run automatically; writes become approvals). Requires the "agent"
+            feature; a conversation keeps the mode of its first message.
 
     AskResponse:
       type: object
-      required: [conversationId, userMessageId, assistantMessageId, sql, answer]
+      required: [conversationId, userMessageId, assistantMessageId, answer]
       properties:
         conversationId: { type: string }
         userMessageId: { type: string }
         assistantMessageId: { type: string }
-        sql: { type: string, description: The generated read-only SQL (always shown) }
+        sql: { type: string, description: "The generated read-only SQL (chat mode; agent mode may carry steps instead)" }
         result: { $ref: "#/components/schemas/ResultSummary" }
         resultError:
           type: string
           description: Set instead of result when query execution failed.
         answer: { type: string, description: Natural-language explanation of the outcome }
+        steps:
+          type: array
+          description: Agent-mode tool steps, in execution order.
+          items: { $ref: "#/components/schemas/Step" }
+        pendingApprovalId:
+          type: string
+          description: Set when the turn ended awaiting a write approval.
+
+    Step:
+      type: object
+      required: [index, kind, summary]
+      properties:
+        index: { type: integer }
+        kind: { type: string, enum: [query, schema, note] }
+        summary: { type: string, description: One-line description of the step }
+        sql: { type: string, description: The read-only SQL this step executed (kind query) }
+        result: { $ref: "#/components/schemas/ResultSummary" }
+        error: { type: string, description: Step execution error }
+
+    Approval:
+      type: object
+      required: [id, sql, status, source, createdAt]
+      properties:
+        id: { type: string }
+        sql: { type: string, description: The exact statement that will run if approved }
+        rationale: { type: string, description: The model's stated reason for the write }
+        status: { type: string, enum: [pending, approved, rejected] }
+        source:
+          type: object
+          description: Where the proposal came from (exactly one of the ids is set).
+          properties:
+            conversationId: { type: string }
+            messageId: { type: string }
+            taskId: { type: string }
+        createdAt: { type: string, format: date-time }
+        decidedAt: { type: string, format: date-time }
+
+    Task:
+      type: object
+      required: [id, title, prompt, status, createdAt, updatedAt]
+      properties:
+        id: { type: string }
+        title: { type: string }
+        prompt: { type: string }
+        status: { type: string, enum: [queued, running, needs_approval, done, failed, canceled] }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        answer: { type: string, description: Final answer when done }
+        error: { type: string, description: Failure reason when failed }
+
+    TaskDetail:
+      type: object
+      required: [task, steps]
+      properties:
+        task: { $ref: "#/components/schemas/Task" }
+        steps:
+          type: array
+          items: { $ref: "#/components/schemas/Step" }
+        pendingApproval: { $ref: "#/components/schemas/Approval" }
 
     ResultSummary:
       type: object
@@ -455,10 +699,14 @@ components:
 
     Conversation:
       type: object
-      required: [id, title, createdAt, updatedAt]
+      required: [id, title, mode, createdAt, updatedAt]
       properties:
         id: { type: string }
         title: { type: string, description: Derived from the first question, max 80 chars }
+        mode:
+          type: string
+          enum: [chat, agent]
+          description: Fixed by the conversation's first message.
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
 
@@ -481,6 +729,13 @@ components:
         sql: { type: string }
         result: { $ref: "#/components/schemas/ResultSummary" }
         error: { type: string }
+        steps:
+          type: array
+          description: Agent-mode tool steps persisted with the message.
+          items: { $ref: "#/components/schemas/Step" }
+        pendingApprovalId:
+          type: string
+          description: Set while this message's proposed write awaits a decision.
         createdAt: { type: string, format: date-time }
 
     TrainingCapture:

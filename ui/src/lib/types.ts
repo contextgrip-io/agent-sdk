@@ -1,11 +1,19 @@
 // API types, mirrored from ../../openapi.yaml (the source of truth).
 
+export type Feature = 'chat' | 'agent' | 'board';
+
 export interface Status {
   version: string;
   model: string;
   engine: string;
   ready: boolean;
+  /** Enabled surfaces from AI_CHAT_FEATURES. */
+  features: Feature[];
+  /** True when AI_CHAT_WRITE_DATABASE_URL is configured — approvals can execute. */
+  writesEnabled: boolean;
 }
+
+export type AskMode = 'chat' | 'agent';
 
 export interface ResultSummary {
   columns?: string[];
@@ -29,9 +37,69 @@ export function isResultError(r: ResultEvent): r is ResultError {
   return typeof (r as ResultError).error === 'string';
 }
 
+/** One agent-mode tool step. */
+export interface Step {
+  index: number;
+  kind: 'query' | 'schema' | 'note';
+  /** One-line description of the step. */
+  summary: string;
+  /** The read-only SQL this step executed (kind query). */
+  sql?: string;
+  result?: ResultSummary;
+  /** Step execution error. */
+  error?: string;
+}
+
+/** A proposed write awaiting (or past) a decision. */
+export interface Approval {
+  id: string;
+  /** The exact statement that will run if approved. */
+  sql: string;
+  /** The model's stated reason for the write. */
+  rationale?: string;
+  status: 'pending' | 'approved' | 'rejected';
+  source?: {
+    conversationId?: string;
+    messageId?: string;
+    taskId?: string;
+  };
+  createdAt: string;
+  decidedAt?: string;
+}
+
+/** Response of POST /api/v1/approvals/{id}. */
+export interface ApprovalDecision {
+  approval: Approval;
+  result?: ResultSummary;
+  /** Execution error when the approved write failed. */
+  error?: string;
+}
+
+export type TaskStatus = 'queued' | 'running' | 'needs_approval' | 'done' | 'failed' | 'canceled';
+
+export interface Task {
+  id: string;
+  title: string;
+  prompt: string;
+  status: TaskStatus;
+  createdAt: string;
+  updatedAt: string;
+  /** Final answer when done. */
+  answer?: string;
+  /** Failure reason when failed. */
+  error?: string;
+}
+
+export interface TaskDetail {
+  task: Task;
+  steps: Step[];
+  pendingApproval?: Approval;
+}
+
 export interface Conversation {
   id: string;
   title: string;
+  mode?: 'chat' | 'agent';
   createdAt: string;
   updatedAt: string;
 }
@@ -43,6 +111,10 @@ export interface ApiMessage {
   sql?: string;
   result?: ResultSummary;
   error?: string;
+  /** Agent-mode tool steps persisted with the message. */
+  steps?: Step[];
+  /** Set while this message's proposed write awaits a decision. */
+  pendingApprovalId?: string;
   createdAt: string;
 }
 
@@ -85,6 +157,12 @@ export interface UiMessage {
   resultErrorTimeMs?: number;
   /** Terminal error (red box). */
   error?: string;
+  /** Agent-mode tool steps, in order. */
+  steps?: Step[];
+  /** Id of the write proposal this turn ended on. */
+  pendingApprovalId?: string;
+  /** The full pending approval, when known (streamed event or lookup). */
+  approval?: Approval;
   /** True while this assistant turn is still streaming. */
   streaming?: boolean;
 }
@@ -107,5 +185,16 @@ export function uiMessageFromApi(m: ApiMessage): UiMessage {
     result: m.result,
     resultError: isQueryFailure ? m.error : undefined,
     error: isQueryFailure ? undefined : m.error,
+    steps: m.steps,
+    pendingApprovalId: m.pendingApprovalId,
   };
+}
+
+/**
+ * A conversation keeps the mode of its first message (server-enforced), but
+ * the contract does not expose the mode directly — infer it from agent-only
+ * artifacts (steps / pending approvals) on any assistant message.
+ */
+export function looksLikeAgentConversation(messages: ApiMessage[]): boolean {
+  return messages.some((m) => (m.steps?.length ?? 0) > 0 || Boolean(m.pendingApprovalId));
 }

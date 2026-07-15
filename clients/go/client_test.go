@@ -29,7 +29,7 @@ func TestStatus(t *testing.T) {
 			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		io.WriteString(w, `{"version":"0.1.0","model":"claude-sonnet-4-5","engine":"postgresql","ready":true}`)
+		io.WriteString(w, `{"version":"0.1.0","model":"claude-sonnet-4-5","engine":"postgresql","ready":true,"features":["chat","agent","board"],"writesEnabled":true}`)
 	}))
 	defer srv.Close()
 
@@ -37,8 +37,15 @@ func TestStatus(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Status: %v", err)
 	}
-	want := aichat.Status{Version: "0.1.0", Model: "claude-sonnet-4-5", Engine: "postgresql", Ready: true}
-	if got != want {
+	want := aichat.Status{
+		Version:       "0.1.0",
+		Model:         "claude-sonnet-4-5",
+		Engine:        "postgresql",
+		Ready:         true,
+		Features:      []string{"chat", "agent", "board"},
+		WritesEnabled: true,
+	}
+	if !reflect.DeepEqual(got, want) {
 		t.Errorf("Status = %+v, want %+v", got, want)
 	}
 }

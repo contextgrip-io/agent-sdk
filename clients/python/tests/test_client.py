@@ -124,6 +124,8 @@ class TestStatus:
                 "model": "claude-sonnet-4-5",
                 "engine": "postgresql",
                 "ready": True,
+                "features": ["chat", "agent", "board"],
+                "writesEnabled": True,
             },
         )
 
@@ -134,6 +136,29 @@ class TestStatus:
         assert status.model == "claude-sonnet-4-5"
         assert status.engine == "postgresql"
         assert status.ready is True
+        assert status.features == ["chat", "agent", "board"]
+        assert status.writes_enabled is True
+
+    def test_status_chat_only_writes_disabled(
+        self, server: StubServer, client: Client
+    ) -> None:
+        server.json(
+            "GET",
+            "/api/v1/status",
+            {
+                "version": "0.1.0",
+                "model": "claude-sonnet-4-5",
+                "engine": "postgresql",
+                "ready": True,
+                "features": ["chat"],
+                "writesEnabled": False,
+            },
+        )
+
+        status = client.status()
+
+        assert status.features == ["chat"]
+        assert status.writes_enabled is False
 
 
 class TestConversations:
@@ -327,7 +352,14 @@ class TestClientBehavior:
         server.json(
             "GET",
             "/api/v1/status",
-            {"version": "0.1.0", "model": "m", "engine": "postgresql", "ready": True},
+            {
+                "version": "0.1.0",
+                "model": "m",
+                "engine": "postgresql",
+                "ready": True,
+                "features": ["chat"],
+                "writesEnabled": False,
+            },
         )
 
         with Client(base_url=server.base_url, timeout=10.0) as client:

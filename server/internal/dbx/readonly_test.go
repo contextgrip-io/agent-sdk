@@ -64,3 +64,17 @@ func TestVerifyReadOnlySQLTrailingSemicolonOnly(t *testing.T) {
 	assert.NoError(t, VerifyReadOnlySQL("SELECT 1;"))
 	assert.Error(t, VerifyReadOnlySQL("SELECT 1; ;"))
 }
+
+func TestVerifySingleStatement(t *testing.T) {
+	t.Parallel()
+	// The approval-execution gate: exactly one statement (raw interior
+	// semicolons rejected regardless of quoting) but no read-only
+	// requirement — mutating statements pass.
+	assert.NoError(t, VerifySingleStatement("UPDATE orders SET status = 'ok'"))
+	assert.NoError(t, VerifySingleStatement("DELETE FROM orders WHERE id = 1;"))
+	assert.NoError(t, VerifySingleStatement("SELECT 1"))
+	assert.Error(t, VerifySingleStatement(""))
+	assert.Error(t, VerifySingleStatement("   ;  "))
+	assert.Error(t, VerifySingleStatement("UPDATE t SET x = 1; DELETE FROM t"))
+	assert.Error(t, VerifySingleStatement(`UPDATE t SET x = 'a;b'`)) // documented over-rejection
+}

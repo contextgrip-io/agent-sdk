@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
@@ -13,9 +14,11 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/contextgrip-io/agent-sdk/server/internal/approvalstore"
 	"github.com/contextgrip-io/agent-sdk/server/internal/assistant"
 	"github.com/contextgrip-io/agent-sdk/server/internal/chatstore"
 	"github.com/contextgrip-io/agent-sdk/server/internal/dbx"
+	"github.com/contextgrip-io/agent-sdk/server/internal/taskstore"
 	"github.com/contextgrip-io/agent-sdk/server/internal/tokenstore"
 	"github.com/contextgrip-io/agent-sdk/server/internal/trainingstore"
 )
@@ -25,12 +28,14 @@ const testPrimaryToken = "primary-token"
 // ── fakes ───────────────────────────────────────────────────────────────────
 
 type fakeModel struct {
-	modelID  string
-	generate func(ctx context.Context, in assistant.GenerateSQLInput) (string, error)
-	stream   func(ctx context.Context, in assistant.AnswerInput, emit func(string) error) (string, error)
+	modelID   string
+	generate  func(ctx context.Context, in assistant.GenerateSQLInput) (string, error)
+	stream    func(ctx context.Context, in assistant.AnswerInput, emit func(string) error) (string, error)
+	agentTurn func(ctx context.Context, in assistant.AgentTurnInput) (*assistant.AgentTurnOutput, error)
 
-	lastGenerateInput *assistant.GenerateSQLInput
-	lastAnswerInput   *assistant.AnswerInput
+	lastGenerateInput  *assistant.GenerateSQLInput
+	lastAnswerInput    *assistant.AnswerInput
+	lastAgentTurnInput *assistant.AgentTurnInput
 }
 
 func (f *fakeModel) Model() string { return f.modelID }
@@ -43,6 +48,41 @@ func (f *fakeModel) GenerateSQL(ctx context.Context, in assistant.GenerateSQLInp
 func (f *fakeModel) StreamAnswer(ctx context.Context, in assistant.AnswerInput, emit func(string) error) (string, error) {
 	f.lastAnswerInput = &in
 	return f.stream(ctx, in, emit)
+}
+
+func (f *fakeModel) AgentTurn(ctx context.Context, in assistant.AgentTurnInput) (*assistant.AgentTurnOutput, error) {
+	f.lastAgentTurnInput = &in
+	if f.agentTurn == nil {
+		return nil, errNoAgentScript
+	}
+	return f.agentTurn(ctx, in)
+}
+
+var errNoAgentScript = errors.New("fakeModel: no agent script configured")
+
+// agentScript builds a scriptable AgentTurn: the number of completed
+// exchanges selects the turn. Turns beyond the script error out.
+func agentScript(turns ...assistant.AgentTurnOutput) func(context.Context, assistant.AgentTurnInput) (*assistant.AgentTurnOutput, error) {
+	return func(_ context.Context, in assistant.AgentTurnInput) (*assistant.AgentTurnOutput, error) {
+		idx := len(in.Exchanges)
+		if idx >= len(turns) {
+			return nil, errors.New("fakeModel: agent script exhausted")
+		}
+		out := turns[idx]
+		return &out, nil
+	}
+}
+
+func queryCall(sql, summary string) assistant.AgentTurnOutput {
+	return assistant.AgentTurnOutput{Call: &assistant.AgentCall{Tool: assistant.ToolRunQuery, SQL: sql, Summary: summary}}
+}
+
+func writeCall(sql, rationale string) assistant.AgentTurnOutput {
+	return assistant.AgentTurnOutput{Call: &assistant.AgentCall{Tool: assistant.ToolProposeWrite, SQL: sql, Rationale: rationale}}
+}
+
+func finalAnswer(text string) assistant.AgentTurnOutput {
+	return assistant.AgentTurnOutput{Answer: text}
 }
 
 func defaultFakeModel() *fakeModel {
@@ -88,6 +128,21 @@ func (f *fakeDB) RunReadOnly(_ context.Context, sql string, limit int, timeout t
 
 func (f *fakeDB) Ping(_ context.Context) error { return f.pingErr }
 
+// fakeWriteExecutor implements WriteExecutor without PostgreSQL.
+type fakeWriteExecutor struct {
+	rowsAffected int64
+	err          error
+	executed     []string
+}
+
+func (f *fakeWriteExecutor) ExecuteWrite(_ context.Context, sql string) (int64, error) {
+	f.executed = append(f.executed, sql)
+	if f.err != nil {
+		return 0, f.err
+	}
+	return f.rowsAffected, nil
+}
+
 func defaultFakeDB() *fakeDB {
 	return &fakeDB{
 		schema: "schema public:\n  table orders (id bigint)\n",
@@ -103,12 +158,15 @@ func defaultFakeDB() *fakeDB {
 // ── test environment ────────────────────────────────────────────────────────
 
 type testEnv struct {
-	server   *Server
-	chat     *chatstore.Store
-	tokens   *tokenstore.Store
-	training *trainingstore.Store
-	model    *fakeModel
-	db       *fakeDB
+	server    *Server
+	chat      *chatstore.Store
+	tokens    *tokenstore.Store
+	training  *trainingstore.Store
+	approvals *approvalstore.Store
+	tasks     *taskstore.Store
+	writeDB   *fakeWriteExecutor
+	model     *fakeModel
+	db        *fakeDB
 }
 
 const (
@@ -125,14 +183,24 @@ func newTestEnv(t *testing.T, mutate func(cfg *Config)) *testEnv {
 	require.NoError(t, err)
 	training, err := trainingstore.New(path)
 	require.NoError(t, err)
+	approvals, err := approvalstore.New(path)
+	require.NoError(t, err)
+	tasks, err := taskstore.New(path)
+	require.NoError(t, err)
 	t.Cleanup(func() {
 		_ = chat.Close()
 		_ = tokens.Close()
 		_ = training.Close()
+		_ = approvals.Close()
+		_ = tasks.Close()
 	})
 
 	sum := sha256.Sum256([]byte(testPrimaryToken))
-	env := &testEnv{chat: chat, tokens: tokens, training: training, model: defaultFakeModel(), db: defaultFakeDB()}
+	env := &testEnv{
+		chat: chat, tokens: tokens, training: training, approvals: approvals, tasks: tasks,
+		writeDB: &fakeWriteExecutor{rowsAffected: 3},
+		model:   defaultFakeModel(), db: defaultFakeDB(),
+	}
 	cfg := Config{
 		Model:              env.model,
 		ModelID:            env.model.modelID,
@@ -140,6 +208,9 @@ func newTestEnv(t *testing.T, mutate func(cfg *Config)) *testEnv {
 		Chat:               chat,
 		Tokens:             tokens,
 		Training:           training,
+		Approvals:          approvals,
+		Tasks:              tasks,
+		WriteDB:            env.writeDB,
 		ConnectionID:       testConnectionID,
 		ConnectionName:     testConnectionName,
 		PrimaryTokenSHA256: sum[:],
@@ -149,6 +220,22 @@ func newTestEnv(t *testing.T, mutate func(cfg *Config)) *testEnv {
 	}
 	env.server = New(cfg)
 	return env
+}
+
+// startTaskRunner runs the board worker for the duration of the test with a
+// fast poll interval.
+func (e *testEnv) startTaskRunner(t *testing.T) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		e.server.RunTaskWorker(ctx)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
 }
 
 // do issues a request against the in-process handler.

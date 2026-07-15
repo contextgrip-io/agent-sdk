@@ -13,6 +13,8 @@ from collections.abc import Iterable, Iterator
 from typing import Any
 
 from .models import (
+    Approval,
+    ApprovalRequiredEvent,
     DeltaEvent,
     DoneEvent,
     ErrorEvent,
@@ -20,6 +22,8 @@ from .models import (
     ResultEvent,
     ResultSummary,
     SqlEvent,
+    Step,
+    StepEvent,
     StreamEvent,
 )
 
@@ -84,12 +88,17 @@ def parse_stream_event(event_name: str, data: str) -> StreamEvent | None:
                 )
             summary = ResultSummary.from_dict(payload)
             return ResultEvent(result=summary, execution_time_ms=summary.execution_time_ms)
+        if event_name == "step":
+            return StepEvent(step=Step.from_dict(payload))
+        if event_name == "approval_required":
+            return ApprovalRequiredEvent(approval=Approval.from_dict(payload))
         if event_name == "delta":
             return DeltaEvent(text=payload["text"])
         if event_name == "done":
             return DoneEvent(
                 conversation_id=payload["conversationId"],
                 assistant_message_id=payload["assistantMessageId"],
+                pending_approval_id=payload.get("pendingApprovalId"),
             )
         if event_name == "error":
             return ErrorEvent(message=payload["message"])

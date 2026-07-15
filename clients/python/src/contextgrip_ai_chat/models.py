@@ -19,6 +19,8 @@ class Status:
     model: str
     engine: str
     ready: bool
+    features: list[str]
+    writes_enabled: bool
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "Status":
@@ -27,6 +29,8 @@ class Status:
             model=data["model"],
             engine=data["engine"],
             ready=data["ready"],
+            features=data["features"],
+            writes_enabled=data["writesEnabled"],
         )
 
 
@@ -52,33 +56,65 @@ class ResultSummary:
 
 
 @dataclass
+class Step:
+    """One agent-mode tool step, in execution order."""
+
+    index: int
+    kind: str  # query | schema | note
+    summary: str
+    sql: str | None = None
+    result: ResultSummary | None = None
+    error: str | None = None
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "Step":
+        result = data.get("result")
+        return cls(
+            index=data["index"],
+            kind=data["kind"],
+            summary=data["summary"],
+            sql=data.get("sql"),
+            result=ResultSummary.from_dict(result) if result is not None else None,
+            error=data.get("error"),
+        )
+
+
+@dataclass
 class AskResponse:
     """POST /api/v1/ask response.
 
-    Exactly one of ``result`` / ``result_error`` is set: ``result_error``
-    replaces ``result`` when query execution failed (which is not an HTTP
-    error — ``answer`` then explains the failure).
+    In chat mode ``sql`` is set and exactly one of ``result`` /
+    ``result_error`` accompanies it (``result_error`` means query execution
+    failed, which is not an HTTP error — ``answer`` then explains the
+    failure). In agent mode the sql/result pair may be absent: ``steps``
+    carries the queries instead, and ``pending_approval_id`` is set when
+    the turn ended awaiting a write approval.
     """
 
     conversation_id: str
     user_message_id: str
     assistant_message_id: str
-    sql: str
     answer: str
+    sql: str | None = None
     result: ResultSummary | None = None
     result_error: str | None = None
+    steps: list[Step] | None = None
+    pending_approval_id: str | None = None
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "AskResponse":
         result = data.get("result")
+        steps = data.get("steps")
         return cls(
             conversation_id=data["conversationId"],
             user_message_id=data["userMessageId"],
             assistant_message_id=data["assistantMessageId"],
-            sql=data["sql"],
             answer=data["answer"],
+            sql=data.get("sql"),
             result=ResultSummary.from_dict(result) if result is not None else None,
             result_error=data.get("resultError"),
+            steps=[Step.from_dict(s) for s in steps] if steps is not None else None,
+            pending_approval_id=data.get("pendingApprovalId"),
         )
 
 
@@ -88,6 +124,7 @@ class Conversation:
     title: str
     created_at: str
     updated_at: str
+    mode: str = "chat"  # fixed by the conversation's first message
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "Conversation":
@@ -96,6 +133,7 @@ class Conversation:
             title=data["title"],
             created_at=data["createdAt"],
             updated_at=data["updatedAt"],
+            mode=data.get("mode", "chat"),
         )
 
 
@@ -108,10 +146,13 @@ class Message:
     sql: str | None = None
     result: ResultSummary | None = None
     error: str | None = None
+    steps: list[Step] | None = None
+    pending_approval_id: str | None = None
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "Message":
         result = data.get("result")
+        steps = data.get("steps")
         return cls(
             id=data["id"],
             role=data["role"],
@@ -120,6 +161,8 @@ class Message:
             sql=data.get("sql"),
             result=ResultSummary.from_dict(result) if result is not None else None,
             error=data.get("error"),
+            steps=[Step.from_dict(s) for s in steps] if steps is not None else None,
+            pending_approval_id=data.get("pendingApprovalId"),
         )
 
 
@@ -177,6 +220,118 @@ class CreatedToken:
             created_at=data["createdAt"],
             token=data["token"],
             last_used_at=data.get("lastUsedAt"),
+        )
+
+
+# --- approvals & tasks --------------------------------------------------------
+
+
+@dataclass
+class ApprovalSource:
+    """Where a write proposal came from (exactly one of the ids is set)."""
+
+    conversation_id: str | None = None
+    message_id: str | None = None
+    task_id: str | None = None
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "ApprovalSource":
+        return cls(
+            conversation_id=data.get("conversationId"),
+            message_id=data.get("messageId"),
+            task_id=data.get("taskId"),
+        )
+
+
+@dataclass
+class Approval:
+    """A proposed write awaiting (or carrying) a decision."""
+
+    id: str
+    sql: str
+    status: str  # pending | approved | rejected
+    source: ApprovalSource
+    created_at: str
+    rationale: str | None = None
+    decided_at: str | None = None
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "Approval":
+        return cls(
+            id=data["id"],
+            sql=data["sql"],
+            status=data["status"],
+            source=ApprovalSource.from_dict(data.get("source") or {}),
+            created_at=data["createdAt"],
+            rationale=data.get("rationale"),
+            decided_at=data.get("decidedAt"),
+        )
+
+
+@dataclass
+class DecideApprovalResult:
+    """POST /api/v1/approvals/{id} response.
+
+    ``result`` carries the execution outcome of an approved write;
+    ``error`` is set instead when the approved write failed.
+    """
+
+    approval: Approval
+    result: ResultSummary | None = None
+    error: str | None = None
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "DecideApprovalResult":
+        result = data.get("result")
+        return cls(
+            approval=Approval.from_dict(data["approval"]),
+            result=ResultSummary.from_dict(result) if result is not None else None,
+            error=data.get("error"),
+        )
+
+
+@dataclass
+class Task:
+    """A board task run through the agent loop in the background."""
+
+    id: str
+    title: str
+    prompt: str
+    status: str  # queued | running | needs_approval | done | failed | canceled
+    created_at: str
+    updated_at: str
+    answer: str | None = None
+    error: str | None = None
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "Task":
+        return cls(
+            id=data["id"],
+            title=data["title"],
+            prompt=data["prompt"],
+            status=data["status"],
+            created_at=data["createdAt"],
+            updated_at=data["updatedAt"],
+            answer=data.get("answer"),
+            error=data.get("error"),
+        )
+
+
+@dataclass
+class TaskDetail:
+    """Task detail: status, transcript steps, answer, pending approval."""
+
+    task: Task
+    steps: list[Step] = field(default_factory=list)
+    pending_approval: Approval | None = None
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "TaskDetail":
+        pending = data.get("pendingApproval")
+        return cls(
+            task=Task.from_dict(data["task"]),
+            steps=[Step.from_dict(s) for s in data.get("steps") or []],
+            pending_approval=Approval.from_dict(pending) if pending is not None else None,
         )
 
 
@@ -350,11 +505,34 @@ class DeltaEvent:
 
 
 @dataclass
+class StepEvent:
+    """Agent mode: one completed tool step, in order."""
+
+    step: Step
+
+
+@dataclass
+class ApprovalRequiredEvent:
+    """Agent mode: a proposed write; the turn ends after this event.
+
+    The write executes only via ``decide_approval`` — the following
+    ``DoneEvent`` carries the ``pending_approval_id``.
+    """
+
+    approval: Approval
+
+
+@dataclass
 class DoneEvent:
-    """Terminal success event."""
+    """Terminal success event.
+
+    ``pending_approval_id`` is set when the turn ended awaiting a write
+    approval (agent mode).
+    """
 
     conversation_id: str
     assistant_message_id: str
+    pending_approval_id: str | None = None
 
 
 @dataclass
@@ -364,4 +542,13 @@ class ErrorEvent:
     message: str
 
 
-StreamEvent = Union[MetaEvent, SqlEvent, ResultEvent, DeltaEvent, DoneEvent, ErrorEvent]
+StreamEvent = Union[
+    MetaEvent,
+    SqlEvent,
+    ResultEvent,
+    StepEvent,
+    ApprovalRequiredEvent,
+    DeltaEvent,
+    DoneEvent,
+    ErrorEvent,
+]

@@ -19,6 +19,12 @@
   --banner-bg: #fff7ed;
   --banner-border: #fdba74;
   --banner-text: #7c2d12;
+  --green-bg: #dcfce7;
+  --green-border: #22c55e;
+  --green-text: #14532d;
+  --blue-bg: #dbeafe;
+  --blue-border: #3b82f6;
+  --blue-text: #1e3a8a;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -41,6 +47,12 @@
     --banner-bg: #33210f;
     --banner-border: #9a5b1d;
     --banner-text: #fdba74;
+    --green-bg: #12301c;
+    --green-border: #15803d;
+    --green-text: #86efac;
+    --blue-bg: #16283f;
+    --blue-border: #2563eb;
+    --blue-text: #93c5fd;
   }
 }
 
@@ -431,12 +443,28 @@ code {
 
 /* ---- composer & footer ---- */
 
+.composer-block {
+  border-top: 1px solid var(--border);
+  padding: 0.55rem 0 0.4rem;
+}
+
+.agent-toggle-row {
+  display: flex;
+  justify-content: flex-end;
+  padding-bottom: 0.4rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.agent-locked-hint {
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
 .composer {
   display: flex;
   gap: 0.5rem;
   align-items: flex-end;
-  border-top: 1px solid var(--border);
-  padding: 0.7rem 0 0.4rem;
 }
 
 .composer textarea {
@@ -559,4 +587,372 @@ code {
   border-radius: 8px;
   padding: 0.4rem 0.6rem;
   font-size: 0.82rem;
+}
+
+/* ---- view nav (Chat / Board) ---- */
+
+.view-nav {
+  display: flex;
+  gap: 0.25rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.15rem;
+}
+
+.nav-btn {
+  background: transparent;
+  border: none;
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 0.85rem;
+  padding: 0.2rem 0.85rem;
+}
+
+.nav-btn.active {
+  background: var(--accent);
+  color: var(--accent-text);
+}
+
+/* ---- agent steps ---- */
+
+.step-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+  overflow: hidden;
+}
+
+.step-item + .step-item {
+  border-top: 1px solid var(--border);
+}
+
+.step-item summary,
+.step-plain {
+  padding: 0.4rem 0.7rem;
+  font-size: 0.85rem;
+}
+
+.step-item summary {
+  cursor: pointer;
+  list-style: none;
+}
+
+.step-item summary::-webkit-details-marker {
+  display: none;
+}
+
+.step-item summary:hover {
+  background: var(--code-bg);
+}
+
+.step-icon {
+  display: inline-block;
+  width: 1.1rem;
+  color: var(--green-text);
+  font-weight: 700;
+}
+
+.step-icon.step-failed {
+  color: var(--red-text);
+}
+
+.step-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.5rem 0.7rem 0.7rem;
+  border-top: 1px dashed var(--border);
+}
+
+/* ---- approval card ---- */
+
+.approval-card {
+  border: 1px solid var(--amber-border);
+  background: var(--amber-bg);
+  border-radius: 10px;
+  padding: 0.7rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+.approval-title {
+  color: var(--amber-text);
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.approval-rationale {
+  color: var(--amber-text);
+  font-size: 0.88rem;
+  white-space: pre-wrap;
+}
+
+.approval-hint {
+  color: var(--amber-text);
+  font-size: 0.82rem;
+  opacity: 0.9;
+}
+
+.approval-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.approve-btn {
+  border: none;
+  border-radius: 8px;
+  background: var(--accent);
+  color: var(--accent-text);
+  font-weight: 600;
+  font-size: 0.85rem;
+  padding: 0.35rem 0.9rem;
+}
+
+.approval-outcome {
+  color: var(--amber-text);
+  font-size: 0.88rem;
+  font-weight: 600;
+}
+
+.approval-note {
+  color: var(--amber-text);
+  font-size: 0.82rem;
+  font-style: italic;
+}
+
+/* ---- board ---- */
+
+.app-wide {
+  max-width: 1200px;
+}
+
+.board {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  padding: 0.6rem 0 1rem;
+  min-height: 0;
+}
+
+.board-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.error-inline {
+  color: var(--red-text);
+  font-size: 0.82rem;
+}
+
+.task-form {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+  padding: 0.7rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.task-form input,
+.task-form textarea {
+  font: inherit;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text);
+  resize: vertical;
+}
+
+.task-form input:focus,
+.task-form textarea:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.task-form-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.primary-btn {
+  border: none;
+  border-radius: 8px;
+  background: var(--accent);
+  color: var(--accent-text);
+  font-weight: 600;
+  font-size: 0.88rem;
+  padding: 0.4rem 1rem;
+}
+
+.board-columns {
+  flex: 1;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(180px, 1fr));
+  gap: 0.6rem;
+  align-items: start;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+@media (max-width: 760px) {
+  .board-columns {
+    grid-template-columns: repeat(2, minmax(150px, 1fr));
+  }
+}
+
+.board-column {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+  padding: 0.55rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.board-column h2 {
+  margin: 0;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.column-count {
+  font-weight: 500;
+}
+
+.column-empty {
+  color: var(--muted);
+  font-size: 0.82rem;
+  text-align: center;
+  padding: 0.4rem 0;
+}
+
+.task-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.35rem;
+  text-align: left;
+  font: inherit;
+  font-size: 0.88rem;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.5rem 0.6rem;
+}
+
+.task-card:hover {
+  border-color: var(--accent);
+}
+
+.task-card-title {
+  overflow-wrap: anywhere;
+}
+
+/* status pills */
+
+.pill {
+  display: inline-block;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 0.05rem 0.55rem;
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+
+.pill-running {
+  background: var(--blue-bg);
+  border-color: var(--blue-border);
+  color: var(--blue-text);
+}
+
+.pill-needs_approval {
+  background: var(--amber-bg);
+  border-color: var(--amber-border);
+  color: var(--amber-text);
+}
+
+.pill-done {
+  background: var(--green-bg);
+  border-color: var(--green-border);
+  color: var(--green-text);
+}
+
+.pill-failed {
+  background: var(--red-bg);
+  border-color: var(--red-border);
+  color: var(--red-text);
+}
+
+/* ---- task detail drawer ---- */
+
+.drawer-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.35);
+  z-index: 10;
+}
+
+.drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  height: 100%;
+  width: min(480px, 100%);
+  background: var(--bg);
+  border-left: 1px solid var(--border);
+  padding: 1rem;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+}
+
+.drawer-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.6rem;
+}
+
+.drawer-head h2 {
+  margin: 0;
+  font-size: 1.02rem;
+  overflow-wrap: anywhere;
+}
+
+.drawer-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.task-prompt {
+  color: var(--muted);
+  font-size: 0.88rem;
+  white-space: pre-wrap;
+  border-left: 3px solid var(--border);
+  padding-left: 0.6rem;
+}
+
+.drawer-actions {
+  margin-top: auto;
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 0.5rem;
 }

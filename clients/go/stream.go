@@ -20,6 +20,9 @@ type Meta struct {
 type Done struct {
 	ConversationID     string `json:"conversationId"`
 	AssistantMessageID string `json:"assistantMessageId"`
+	// PendingApprovalID is set when the turn ended awaiting a write
+	// approval (agent mode); decide it via DecideApproval.
+	PendingApprovalID string `json:"pendingApprovalId,omitempty"`
 }
 
 // StreamResult is the payload of the SSE "result" event: a ResultSummary on
@@ -39,13 +42,22 @@ type StreamResult struct {
 // optional; nil handlers are skipped. Handlers are called sequentially from
 // the goroutine that called StreamMessage, in server event order:
 // meta -> sql -> result -> delta* -> done, or a terminal error event.
+//
+// In agent mode (AskRequest.Mode = "agent") the model may take multiple tool
+// steps before answering: OnStep fires once per completed step, and
+// OnApprovalRequired fires when the model proposes a write — the turn ends
+// after that, Done carries PendingApprovalID, and the write executes only
+// via DecideApproval. The sql/result pair may be absent in agent mode (steps
+// carry the queries instead).
 type StreamHandlers struct {
-	OnMeta   func(Meta)
-	OnSQL    func(string)
-	OnResult func(StreamResult)
-	OnDelta  func(string)
-	OnDone   func(Done)
-	OnError  func(string)
+	OnMeta             func(Meta)
+	OnSQL              func(string)
+	OnResult           func(StreamResult)
+	OnStep             func(Step)
+	OnApprovalRequired func(Approval)
+	OnDelta            func(string)
+	OnDone             func(Done)
+	OnError            func(string)
 }
 
 // StreamMessage asks a question via POST /api/v1/messages and dispatches the
@@ -119,6 +131,22 @@ func dispatchSSE(ctx context.Context, r *bufio.Reader, h StreamHandlers) error {
 			}
 			if h.OnResult != nil {
 				h.OnResult(res)
+			}
+		case "step":
+			var s Step
+			if json.Unmarshal(data, &s) != nil {
+				continue
+			}
+			if h.OnStep != nil {
+				h.OnStep(s)
+			}
+		case "approval_required":
+			var a Approval
+			if json.Unmarshal(data, &a) != nil {
+				continue
+			}
+			if h.OnApprovalRequired != nil {
+				h.OnApprovalRequired(a)
 			}
 		case "delta":
 			var p struct {

@@ -20,8 +20,26 @@ Authentication is a bearer token (the server's `APP_ACCESS_TOKEN` or a named
 token minted via the API). The sign-in screen validates it against
 `GET /api/v1/status` and stores it in `localStorage` under `ai_chat_token`;
 "Sign out" clears it. Answers stream over SSE from `POST /api/v1/messages`
-(`meta → sql → result → delta* → done | error`), parsed by the small
-spec-correct parser in `src/lib/sse.ts`.
+(`meta → sql → result → step* → approval_required? → delta* → done | error`),
+parsed by the small spec-correct parser in `src/lib/sse.ts`.
+
+Feature-gated surfaces (from `status.features` / `AI_CHAT_FEATURES`):
+
+- **Agent mode** (`agent`) — the composer gains an "Agent mode" toggle
+  (locked once a conversation starts; the server keeps a conversation on the
+  mode of its first message). Agent turns render their tool steps as a
+  compact expandable list, and a proposed write renders an inline amber
+  approval card (exact SQL, rationale, Approve & run / Reject →
+  `POST /api/v1/approvals/{id}`). When `status.writesEnabled` is false the
+  card explains that `AI_CHAT_WRITE_DATABASE_URL` is not configured and
+  approving is disabled. After a decision the conversation reloads — the
+  server appends the outcome message.
+- **Board** (`board`) — a Chat/Board switch appears in the header. The board
+  lists tasks from `GET /api/v1/tasks` in four columns (Queued, Running,
+  Needs approval, Done incl. failed/canceled), polling every 4 s while
+  visible. "New task" files title + prompt via POST; clicking a card opens a
+  drawer with status, steps, answer/error, the same approval card, Cancel
+  (active tasks), and Delete (finished tasks, with confirm).
 
 Training data: completed answers that carry SQL show 👍/👎 buttons
 (`POST /api/v1/messages/{id}/eval`), and the header's "Training data" button
@@ -60,11 +78,14 @@ npm test          # vitest — covers the SSE parser (src/lib/sse.test.ts)
 index.html            entry document
 vite.config.ts        dev proxy + build output (dist/)
 src/main.tsx          React root
-src/App.tsx           token gate, conversation state, streaming orchestration
+src/App.tsx           token gate, chat/board view switch, conversation state,
+                      streaming orchestration, agent-mode toggle state
 src/components/       SignIn, MessageList (incl. rating), SqlBlock, ResultTable,
-                      Composer, TrainingPanel
+                      Composer (agent toggle), StepList, ApprovalCard,
+                      BoardPage (columns + task drawer), TrainingPanel
 src/lib/types.ts      API types mirrored from openapi.yaml + UI message model
-src/lib/api.ts        fetch client (status/conversations/eval/training + SSE streaming)
+src/lib/api.ts        fetch client (conversations/eval/training/approvals/tasks
+                      + SSE streaming)
 src/lib/sse.ts        incremental SSE frame parser (tested)
 src/styles.css        the one stylesheet (light/dark via prefers-color-scheme)
 ```

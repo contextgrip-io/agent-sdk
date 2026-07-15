@@ -22,7 +22,7 @@ func TestConversationCRUD(t *testing.T) {
 	ctx := context.Background()
 	store := newTestStore(t)
 
-	conv, err := store.CreateConversation(ctx, "c1", "How many orders?")
+	conv, err := store.CreateConversation(ctx, "c1", "How many orders?", "chat")
 	require.NoError(t, err)
 	require.Equal(t, "c1", conv.ID)
 	require.Equal(t, "How many orders?", conv.Title)
@@ -36,7 +36,7 @@ func TestConversationCRUD(t *testing.T) {
 	require.NoError(t, err)
 	require.Nil(t, missing)
 
-	_, err = store.CreateConversation(ctx, "c2", "Second")
+	_, err = store.CreateConversation(ctx, "c2", "Second", "chat")
 	require.NoError(t, err)
 	// c2 is newer, so it lists first.
 	list, err := store.ListConversations(ctx)
@@ -57,7 +57,7 @@ func TestAppendAndListMessages(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	store := newTestStore(t)
-	_, err := store.CreateConversation(ctx, "c1", "t")
+	_, err := store.CreateConversation(ctx, "c1", "t", "chat")
 	require.NoError(t, err)
 
 	_, err = store.AppendMessage(ctx, Message{ID: "m1", ConversationID: "c1", Role: "user", Text: "How many orders?"})
@@ -93,7 +93,7 @@ func TestConversationFull(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	store := newTestStore(t, WithLimits(10, 2))
-	_, err := store.CreateConversation(ctx, "c1", "t")
+	_, err := store.CreateConversation(ctx, "c1", "t", "chat")
 	require.NoError(t, err)
 
 	_, err = store.AppendMessage(ctx, Message{ID: "m1", ConversationID: "c1", Role: "user", Text: "q"})
@@ -109,14 +109,14 @@ func TestPruneOldestConversations(t *testing.T) {
 	ctx := context.Background()
 	store := newTestStore(t, WithLimits(2, 200))
 
-	_, err := store.CreateConversation(ctx, "c1", "first")
+	_, err := store.CreateConversation(ctx, "c1", "first", "chat")
 	require.NoError(t, err)
 	_, err = store.AppendMessage(ctx, Message{ID: "m1", ConversationID: "c1", Role: "user", Text: "q"})
 	require.NoError(t, err)
-	_, err = store.CreateConversation(ctx, "c2", "second")
+	_, err = store.CreateConversation(ctx, "c2", "second", "chat")
 	require.NoError(t, err)
 	// Cap is 2: creating c3 prunes the stalest conversation (c1).
-	_, err = store.CreateConversation(ctx, "c3", "third")
+	_, err = store.CreateConversation(ctx, "c3", "third", "chat")
 	require.NoError(t, err)
 
 	list, err := store.ListConversations(ctx)
@@ -136,7 +136,7 @@ func TestPruneOldestConversations(t *testing.T) {
 	// next prune while the untouched one is evicted.
 	_, err = store.AppendMessage(ctx, Message{ID: "m2", ConversationID: "c2", Role: "user", Text: "q"})
 	require.NoError(t, err)
-	_, err = store.CreateConversation(ctx, "c4", "fourth")
+	_, err = store.CreateConversation(ctx, "c4", "fourth", "chat")
 	require.NoError(t, err)
 	list, err = store.ListConversations(ctx)
 	require.NoError(t, err)
@@ -148,7 +148,7 @@ func TestSanitizeBounds(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	store := newTestStore(t)
-	_, err := store.CreateConversation(ctx, "c1", strings.Repeat("t", 500))
+	_, err := store.CreateConversation(ctx, "c1", strings.Repeat("t", 500), "chat")
 	require.NoError(t, err)
 
 	conv, err := store.GetConversation(ctx, "c1")

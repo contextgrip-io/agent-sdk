@@ -78,7 +78,7 @@ func TestSharedDBFileWithChatstore(t *testing.T) {
 
 	_, raw, err := tokens.Create(ctx, "shared")
 	require.NoError(t, err)
-	_, err = chat.CreateConversation(ctx, "c1", "shared file")
+	_, err = chat.CreateConversation(ctx, "c1", "shared file", "chat")
 	require.NoError(t, err)
 
 	found, err := tokens.FindByHash(ctx, HashToken(raw))

@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/contextgrip-io/agent-sdk/server/internal/approvalstore"
 	"github.com/contextgrip-io/agent-sdk/server/internal/assistant"
 	"github.com/contextgrip-io/agent-sdk/server/internal/chatstore"
 	"github.com/contextgrip-io/agent-sdk/server/internal/dbx"
@@ -21,6 +22,7 @@ import (
 type askRequest struct {
 	Question       string `json:"question"`
 	ConversationID string `json:"conversationId"`
+	Mode           string `json:"mode"` // "chat" (default) | "agent"
 }
 
 // askResponse matches the AskResponse schema.
@@ -28,10 +30,12 @@ type askResponse struct {
 	ConversationID     string                   `json:"conversationId"`
 	UserMessageID      string                   `json:"userMessageId"`
 	AssistantMessageID string                   `json:"assistantMessageId"`
-	SQL                string                   `json:"sql"`
+	SQL                string                   `json:"sql,omitempty"`
 	Result             *chatstore.ResultSummary `json:"result,omitempty"`
 	ResultError        string                   `json:"resultError,omitempty"`
 	Answer             string                   `json:"answer"`
+	Steps              []chatstore.Step         `json:"steps,omitempty"`
+	PendingApprovalID  string                   `json:"pendingApprovalId,omitempty"`
 }
 
 // preflightError carries a pre-stream failure back to the handler.
@@ -46,9 +50,13 @@ func (e *preflightError) Error() string { return e.message }
 // exchange is the validated, persisted starting state of one question.
 type exchange struct {
 	question string
-	conv     *chatstore.Conversation
-	userMsg  *chatstore.Message
-	history  []assistant.Turn
+	// mode is the conversation's effective mode: "chat" or "agent". A
+	// conversation keeps the mode of its first message; the request mode
+	// only applies to new conversations.
+	mode    string
+	conv    *chatstore.Conversation
+	userMsg *chatstore.Message
+	history []assistant.Turn
 }
 
 // preflight validates the request, resolves or creates the conversation, and
@@ -70,6 +78,13 @@ func (s *Server) preflight(r *http.Request) (*exchange, *preflightError) {
 	if len(question) > maxQuestionChars {
 		return nil, &preflightError{http.StatusBadRequest, "VALIDATION", "question is too long"}
 	}
+	requestMode := strings.TrimSpace(body.Mode)
+	if requestMode == "" {
+		requestMode = "chat"
+	}
+	if requestMode != "chat" && requestMode != "agent" {
+		return nil, &preflightError{http.StatusBadRequest, "VALIDATION", "mode must be chat or agent"}
+	}
 
 	ctx := r.Context()
 	store := s.cfg.Chat
@@ -84,8 +99,24 @@ func (s *Server) preflight(r *http.Request) (*exchange, *preflightError) {
 		if conv == nil {
 			return nil, &preflightError{http.StatusNotFound, "NOT_FOUND", "conversation not found"}
 		}
-	} else {
-		conv, err = store.CreateConversation(ctx, uuid.NewString(), textutil.TruncateUTF8(question, titleMaxChars))
+	}
+
+	// A conversation keeps the mode of its first message: for continuations
+	// the stored mode wins; the request mode only picks the mode of a NEW
+	// conversation.
+	mode := requestMode
+	if conv != nil {
+		mode = conv.Mode
+		if mode == "" {
+			mode = "chat"
+		}
+	}
+	if mode == "agent" && !s.featureEnabled("agent") {
+		return nil, &preflightError{http.StatusForbidden, "FEATURE_DISABLED",
+			"agent mode is not enabled on this instance (AI_CHAT_FEATURES)"}
+	}
+	if conv == nil {
+		conv, err = store.CreateConversation(ctx, uuid.NewString(), textutil.TruncateUTF8(question, titleMaxChars), mode)
 		if err != nil {
 			return nil, &preflightError{http.StatusInternalServerError, "STORE_ERROR", "failed to create conversation"}
 		}
@@ -107,7 +138,7 @@ func (s *Server) preflight(r *http.Request) (*exchange, *preflightError) {
 	}
 
 	s.metrics.questions.Add(1)
-	return &exchange{question: question, conv: conv, userMsg: userMsg, history: history}, nil
+	return &exchange{question: question, mode: mode, conv: conv, userMsg: userMsg, history: history}, nil
 }
 
 // chatHistory rebuilds recent question->SQL turns for follow-up context.
@@ -314,8 +345,89 @@ func (s *Server) runExchange(ctx, persistCtx context.Context, ex *exchange, sess
 	}, nil
 }
 
+// agentChatOutcome is a finished agent-mode chat turn.
+type agentChatOutcome struct {
+	assistantMsg      *chatstore.Message
+	steps             []chatstore.Step
+	answer            string
+	pendingApprovalID string
+}
+
+// agentChatHooks lets the SSE handler observe agent progress; the one-shot
+// handler leaves them nil.
+type agentChatHooks struct {
+	onStep     func(step chatstore.Step)
+	onApproval func(view approvalView)
+}
+
+// runAgentChat runs one agent-mode turn for a chat conversation and persists
+// the assistant message (steps, answer, pending approval marker). The
+// assistant message id is pre-generated so a proposed write can reference it
+// as its source before the message lands.
+func (s *Server) runAgentChat(ctx, persistCtx context.Context, ex *exchange, hooks agentChatHooks) (*agentChatOutcome, *loopError) {
+	assistantMsgID := uuid.NewString()
+
+	outcome, loopErr := s.runAgent(ctx, persistCtx, agentRun{
+		prompt:          ex.question,
+		history:         s.agentHistory(ctx, ex.conv.ID),
+		sourceMessageID: assistantMsgID,
+		onStep: func(step chatstore.Step, _ assistant.AgentExchange) {
+			// Successful reads are training data (session "agent").
+			if step.Kind == "query" && step.Error == "" && step.SQL != "" {
+				s.captureTrainingStep(persistCtx, "agent",
+					agentStepSourceID(assistantMsgID, step.Index), ex.question, step)
+			}
+			if hooks.onStep != nil {
+				hooks.onStep(step)
+			}
+		},
+		onApproval: func(appr approvalstore.Approval) {
+			if hooks.onApproval != nil {
+				hooks.onApproval(toApprovalView(appr))
+			}
+		},
+	})
+	if loopErr != nil {
+		_, _ = s.cfg.Chat.AppendMessage(persistCtx, chatstore.Message{
+			ID:             uuid.NewString(),
+			ConversationID: ex.conv.ID,
+			Role:           "assistant",
+			Error:          loopErr.message,
+		})
+		return nil, loopErr
+	}
+
+	pendingApprovalID := ""
+	if outcome.approval != nil {
+		pendingApprovalID = outcome.approval.ID
+	}
+	assistantMsg, err := s.cfg.Chat.AppendMessage(persistCtx, chatstore.Message{
+		ID:                assistantMsgID,
+		ConversationID:    ex.conv.ID,
+		Role:              "assistant",
+		Text:              outcome.answer,
+		Steps:             outcome.steps,
+		PendingApprovalID: pendingApprovalID,
+	})
+	if err != nil {
+		return nil, &loopError{code: "STORE_ERROR", status: http.StatusInternalServerError,
+			message: "the agent turn finished but could not be saved"}
+	}
+	return &agentChatOutcome{
+		assistantMsg:      assistantMsg,
+		steps:             outcome.steps,
+		answer:            outcome.answer,
+		pendingApprovalID: pendingApprovalID,
+	}, nil
+}
+
+// agentStepSourceID is the training-record dedupe key for a chat agent step.
+func agentStepSourceID(messageID string, index int) string {
+	return fmt.Sprintf("%s:%d", messageID, index)
+}
+
 // handleAsk is the one-shot JSON endpoint: same loop as the SSE endpoint,
-// deltas collected into a single answer.
+// deltas collected into a single answer (agent mode collects steps).
 func (s *Server) handleAsk(w http.ResponseWriter, r *http.Request) {
 	ex, pfErr := s.preflight(r)
 	if pfErr != nil {
@@ -323,6 +435,24 @@ func (s *Server) handleAsk(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	persistCtx := context.WithoutCancel(r.Context())
+
+	if ex.mode == "agent" {
+		outcome, loopErr := s.runAgentChat(r.Context(), persistCtx, ex, agentChatHooks{})
+		if loopErr != nil {
+			writeError(w, loopErr.status, loopErr.code, loopErr.message)
+			return
+		}
+		writeJSON(w, http.StatusOK, askResponse{
+			ConversationID:     ex.conv.ID,
+			UserMessageID:      ex.userMsg.ID,
+			AssistantMessageID: outcome.assistantMsg.ID,
+			Answer:             outcome.answer,
+			Steps:              outcome.steps,
+			PendingApprovalID:  outcome.pendingApprovalID,
+		})
+		return
+	}
+
 	outcome, loopErr := s.runExchange(r.Context(), persistCtx, ex, "ask", loopHooks{})
 	if loopErr != nil {
 		writeError(w, loopErr.status, loopErr.code, loopErr.message)
@@ -378,6 +508,31 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 	}
 
 	_ = emit("meta", map[string]string{"conversationId": ex.conv.ID, "userMessageId": ex.userMsg.ID})
+
+	if ex.mode == "agent" {
+		// Agent mode: meta -> step* -> (approval_required | delta) -> done.
+		outcome, loopErr := s.runAgentChat(r.Context(), persistCtx, ex, agentChatHooks{
+			onStep: func(step chatstore.Step) {
+				_ = emit("step", step)
+			},
+			onApproval: func(view approvalView) {
+				_ = emit("approval_required", view)
+			},
+		})
+		if loopErr != nil {
+			_ = emit("error", map[string]string{"message": loopErr.message})
+			return
+		}
+		if outcome.answer != "" {
+			_ = emit("delta", map[string]string{"text": outcome.answer})
+		}
+		done := map[string]string{"conversationId": ex.conv.ID, "assistantMessageId": outcome.assistantMsg.ID}
+		if outcome.pendingApprovalID != "" {
+			done["pendingApprovalId"] = outcome.pendingApprovalID
+		}
+		_ = emit("done", done)
+		return
+	}
 
 	outcome, loopErr := s.runExchange(r.Context(), persistCtx, ex, "chat", loopHooks{
 		onSQL: func(sql string) {

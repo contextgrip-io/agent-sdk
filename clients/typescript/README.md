@@ -102,6 +102,67 @@ Pre-stream failures (validation, auth, unknown conversation) reject with
 `AiChatError` before any handler fires. Aborting via the signal rejects with
 an `AbortError`.
 
+## Agent mode and approvals
+
+With `mode: 'agent'` (requires the `"agent"` feature — see
+`status().features`), the model may take multiple tool steps before
+answering: `step` events arrive one per completed tool step, and a proposed
+write ends the turn with an `approval_required` event — the write executes
+only when you decide the approval. In agent mode the `sql`/`result` pair may
+be absent (steps carry the queries instead).
+
+```typescript
+let pendingApprovalId: string | undefined;
+
+await client.streamMessage(
+  { question: 'Flag customers who churned in June', mode: 'agent' },
+  {
+    onStep: (step) => console.log(`step ${step.index} [${step.kind}]: ${step.summary}`),
+    onApprovalRequired: (approval) => {
+      console.log('proposed write:', approval.sql, '—', approval.rationale);
+    },
+    onDelta: (text) => process.stdout.write(text),
+    onDone: (done) => { pendingApprovalId = done.pendingApprovalId; },
+  },
+);
+
+if (pendingApprovalId) {
+  // Approving executes the exact proposed SQL against the write connection
+  // (AI_CHAT_WRITE_DATABASE_URL) and returns the execution outcome:
+  const { approval, result, error } = await client.decideApproval(pendingApprovalId, 'approve');
+  if (error) console.error('write failed:', error);
+  else console.log(`${approval.status}: ${result?.rowCount} rows affected`);
+}
+
+// Pending approvals from chat and board sources:
+const pending = await client.listApprovals();
+```
+
+Deciding an already-decided approval rejects with `AiChatError` code
+`ALREADY_DECIDED`; without a configured write connection, approving rejects
+with `WRITES_DISABLED` (both HTTP 409).
+
+## Tasks
+
+Board tasks (requires the `"board"` feature) run in the background through
+the same agent loop, one at a time, oldest first. A proposed write pauses the
+task in `needs_approval`; the approval decision resumes it.
+
+```typescript
+const task = await client.createTask('Weekly churn digest', 'Summarize churn for the last 7 days');
+
+const waiting = await client.listTasks('needs_approval'); // status filter optional
+
+const detail = await client.getTask(task.id);
+console.log(detail.task.status, detail.steps.length, 'steps');
+if (detail.pendingApproval) {
+  await client.decideApproval(detail.pendingApproval.id, 'reject');
+}
+
+await client.cancelTask(task.id);   // queued/running/needs_approval only (409 TASK_FINISHED)
+await client.deleteTask(task.id);   // finished tasks only (409 TASK_ACTIVE)
+```
+
 ## Conversations and tokens
 
 ```typescript
@@ -156,7 +217,9 @@ const { deleted } = await client.deleteTrainingRecords();
 Every non-2xx response throws `AiChatError` with `status` (HTTP status) and,
 when the server provided one, `code` — one of `UNAUTHORIZED`,
 `ADMIN_REQUIRED`, `VALIDATION`, `NOT_FOUND`, `NOT_CONFIGURED`,
-`CONVERSATION_FULL`, `STORE_ERROR`, `MODEL_ERROR`, `STREAM_UNSUPPORTED`.
+`CONVERSATION_FULL`, `STORE_ERROR`, `MODEL_ERROR`, `STREAM_UNSUPPORTED`,
+`FEATURE_DISABLED`, `WRITES_DISABLED`, `ALREADY_DECIDED`, `TASK_ACTIVE`,
+`TASK_FINISHED`.
 
 ## Development
 

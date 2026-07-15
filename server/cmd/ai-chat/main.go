@@ -11,13 +11,17 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/contextgrip-io/agent-sdk/server/internal/api"
+	"github.com/contextgrip-io/agent-sdk/server/internal/approvalstore"
 	"github.com/contextgrip-io/agent-sdk/server/internal/assistant"
 	"github.com/contextgrip-io/agent-sdk/server/internal/chatstore"
 	"github.com/contextgrip-io/agent-sdk/server/internal/dbx"
+	"github.com/contextgrip-io/agent-sdk/server/internal/taskstore"
 	"github.com/contextgrip-io/agent-sdk/server/internal/tokenstore"
 	"github.com/contextgrip-io/agent-sdk/server/internal/trainingstore"
 )
@@ -36,10 +40,21 @@ func main() {
 	baseURL := env("AI_CHAT_ANTHROPIC_BASE_URL", os.Getenv("ANTHROPIC_BASE_URL"))
 	apiKey := os.Getenv("ANTHROPIC_API_KEY")
 	databaseURL := os.Getenv("DATABASE_URL")
+	writeDatabaseURL := os.Getenv("AI_CHAT_WRITE_DATABASE_URL")
 	accessToken := os.Getenv("APP_ACCESS_TOKEN")
 	devNoAuth := os.Getenv("AI_CHAT_DEV_NO_AUTH") == "1"
+	features := api.ParseFeatures(os.Getenv("AI_CHAT_FEATURES"))
+	agentMaxSteps := api.DefaultAgentMaxSteps
+	if raw := os.Getenv("AI_CHAT_AGENT_MAX_STEPS"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed <= 0 {
+			log.Fatalf("AI_CHAT_AGENT_MAX_STEPS must be a positive integer, got %q", raw)
+		}
+		agentMaxSteps = parsed
+	}
 
-	cfg := api.Config{ModelID: modelID, DevNoAuth: devNoAuth}
+	cfg := api.Config{ModelID: modelID, DevNoAuth: devNoAuth, Features: features, AgentMaxSteps: agentMaxSteps}
+	log.Printf("features enabled: %s", strings.Join(features, ", "))
 
 	// Auth is mandatory unless explicitly disabled for local development.
 	switch {
@@ -74,9 +89,21 @@ func main() {
 		log.Fatalf("open training store at %s: %v", dbPath, err)
 	}
 	defer training.Close()
+	approvals, err := approvalstore.New(dbPath)
+	if err != nil {
+		log.Fatalf("open approval store at %s: %v", dbPath, err)
+	}
+	defer approvals.Close()
+	tasks, err := taskstore.New(dbPath)
+	if err != nil {
+		log.Fatalf("open task store at %s: %v", dbPath, err)
+	}
+	defer tasks.Close()
 	cfg.Chat = chat
 	cfg.Tokens = tokens
 	cfg.Training = training
+	cfg.Approvals = approvals
+	cfg.Tasks = tasks
 
 	// Chat endpoints serve 503 NOT_CONFIGURED until both of these are set;
 	// UI and health endpoints work regardless.
@@ -95,15 +122,33 @@ func main() {
 	} else {
 		log.Printf("DATABASE_URL is not set; chat endpoints will return 503 NOT_CONFIGURED")
 	}
+	if writeDatabaseURL != "" {
+		writeDB := dbx.Open(writeDatabaseURL)
+		defer writeDB.Close()
+		cfg.WriteDB = writeDB
+		log.Printf("write connection configured; approved writes will execute")
+	} else {
+		log.Printf("AI_CHAT_WRITE_DATABASE_URL is not set; approvals can only be rejected")
+	}
 
+	apiServer := api.New(cfg)
 	server := &http.Server{
 		Addr:              ":" + port,
-		Handler:           api.New(cfg),
+		Handler:           apiServer,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	// Single background board runner; stops on the same shutdown signal.
+	boardEnabled := false
+	for _, f := range features {
+		boardEnabled = boardEnabled || f == "board"
+	}
+	if boardEnabled {
+		go apiServer.RunTaskWorker(ctx)
+	}
 
 	errCh := make(chan error, 1)
 	go func() {

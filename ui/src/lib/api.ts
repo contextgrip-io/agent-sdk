@@ -4,10 +4,16 @@
 
 import { SseParser, type SseEvent } from './sse';
 import type {
+  Approval,
+  ApprovalDecision,
+  AskMode,
   Conversation,
   ConversationDetail,
   ResultEvent,
   Status,
+  Step,
+  Task,
+  TaskDetail,
   TrainingCapture,
   TrainingStats,
   Verdict,
@@ -119,12 +125,79 @@ export async function deleteTrainingRecords(token: string): Promise<number> {
   return typeof body.deleted === 'number' ? body.deleted : 0;
 }
 
+// ---- approvals ----
+
+export function listApprovals(token: string): Promise<Approval[]> {
+  return getJson<Approval[]>(token, '/api/v1/approvals');
+}
+
+/**
+ * Approve or reject a proposed write. Approving executes the exact SQL
+ * against the write connection. 409 codes: ALREADY_DECIDED, WRITES_DISABLED.
+ */
+export async function decideApproval(
+  token: string,
+  id: string,
+  decision: 'approve' | 'reject',
+): Promise<ApprovalDecision> {
+  const res = await fetch(`/api/v1/approvals/${encodeURIComponent(id)}`, {
+    method: 'POST',
+    headers: { ...authHeaders(token), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ decision }),
+  });
+  if (!res.ok) throw await toApiError(res);
+  return (await res.json()) as ApprovalDecision;
+}
+
+// ---- board tasks ----
+
+export function listTasks(token: string): Promise<Task[]> {
+  return getJson<Task[]>(token, '/api/v1/tasks');
+}
+
+export async function createTask(token: string, body: { title: string; prompt: string }): Promise<Task> {
+  const res = await fetch('/api/v1/tasks', {
+    method: 'POST',
+    headers: { ...authHeaders(token), 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw await toApiError(res);
+  return (await res.json()) as Task;
+}
+
+export function getTask(token: string, id: string): Promise<TaskDetail> {
+  return getJson<TaskDetail>(token, `/api/v1/tasks/${encodeURIComponent(id)}`);
+}
+
+/** 409 TASK_FINISHED when the task already finished. */
+export async function cancelTask(token: string, id: string): Promise<Task> {
+  const res = await fetch(`/api/v1/tasks/${encodeURIComponent(id)}/cancel`, {
+    method: 'POST',
+    headers: authHeaders(token),
+  });
+  if (!res.ok) throw await toApiError(res);
+  return (await res.json()) as Task;
+}
+
+/** Finished tasks only; 409 TASK_ACTIVE otherwise. */
+export async function deleteTask(token: string, id: string): Promise<void> {
+  const res = await fetch(`/api/v1/tasks/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+    headers: authHeaders(token),
+  });
+  if (!res.ok) throw await toApiError(res);
+}
+
 export interface StreamHandlers {
   onMeta?(meta: { conversationId: string; userMessageId: string }): void;
   onSql?(sql: string): void;
   onResult?(result: ResultEvent): void;
   onDelta?(text: string): void;
-  onDone?(done: { conversationId: string; assistantMessageId: string }): void;
+  /** Agent mode: one completed tool step, in order. */
+  onStep?(step: Step): void;
+  /** Agent mode: a proposed write. The turn ends after this event. */
+  onApprovalRequired?(approval: Approval): void;
+  onDone?(done: { conversationId: string; assistantMessageId: string; pendingApprovalId?: string }): void;
   /** Terminal `error` event from the stream. */
   onError?(message: string): void;
 }
@@ -147,9 +220,23 @@ function dispatch(ev: SseEvent, h: StreamHandlers): void {
     case 'delta':
       if (d && typeof d.text === 'string') h.onDelta?.(d.text);
       break;
+    case 'step':
+      if (d && typeof d.index === 'number' && typeof d.summary === 'string') {
+        h.onStep?.(d as unknown as Step);
+      }
+      break;
+    case 'approval_required':
+      if (d && typeof d.id === 'string' && typeof d.sql === 'string') {
+        h.onApprovalRequired?.(d as unknown as Approval);
+      }
+      break;
     case 'done':
       if (d && typeof d.conversationId === 'string' && typeof d.assistantMessageId === 'string') {
-        h.onDone?.({ conversationId: d.conversationId, assistantMessageId: d.assistantMessageId });
+        h.onDone?.({
+          conversationId: d.conversationId,
+          assistantMessageId: d.assistantMessageId,
+          ...(typeof d.pendingApprovalId === 'string' ? { pendingApprovalId: d.pendingApprovalId } : {}),
+        });
       }
       break;
     case 'error':
@@ -171,7 +258,7 @@ function dispatch(ev: SseEvent, h: StreamHandlers): void {
  */
 export async function streamMessage(
   token: string,
-  body: { question: string; conversationId?: string },
+  body: { question: string; conversationId?: string; mode?: AskMode },
   handlers: StreamHandlers,
   signal?: AbortSignal,
 ): Promise<void> {

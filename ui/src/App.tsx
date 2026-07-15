@@ -4,16 +4,19 @@ import {
   deleteConversation,
   getConversation,
   getStatus,
+  listApprovals,
   listConversations,
   streamMessage,
 } from './lib/api';
 import {
   isResultError,
+  looksLikeAgentConversation,
   uiMessageFromApi,
   type Conversation,
   type Status,
   type UiMessage,
 } from './lib/types';
+import { BoardPage } from './components/BoardPage';
 import { Composer } from './components/Composer';
 import { MessageList } from './components/MessageList';
 import { SignIn } from './components/SignIn';
@@ -33,12 +36,16 @@ function localId(prefix: string): string {
 
 export default function App() {
   const [auth, setAuth] = useState<Auth>({ phase: 'checking' });
+  const [view, setView] = useState<'chat' | 'board'>('chat');
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [messages, setMessages] = useState<UiMessage[]>([]);
   const [loadingThread, setLoadingThread] = useState(false);
   const [streaming, setStreaming] = useState(false);
   const [showTraining, setShowTraining] = useState(false);
+  // The Agent mode toggle. A conversation keeps the mode of its first
+  // message (server-enforced), so this is only editable pre-conversation.
+  const [agentMode, setAgentMode] = useState(false);
   // The id the streaming request was started under can go stale if the user
   // switches conversations mid-stream; track the active thread with a ref.
   const activeThreadRef = useRef<string | null>(null);
@@ -50,6 +57,9 @@ export default function App() {
     setConversationId(null);
     setMessages([]);
     setStreaming(false);
+    setShowTraining(false);
+    setAgentMode(false);
+    setView('chat');
   }, []);
 
   /** Sign out on expired/revoked tokens; otherwise report and continue. */
@@ -125,9 +135,27 @@ export default function App() {
     setLoadingThread(true);
     try {
       const detail = await getConversation(auth.token, id);
+      // Reflect the conversation's (server-sticky) mode in the locked toggle.
+      setAgentMode(detail.conversation.mode === 'agent' || looksLikeAgentConversation(detail.messages));
+      let uiMessages = detail.messages.map(uiMessageFromApi);
+      // A reloaded pending approval only carries its id — look the full
+      // proposal up in the pending list so the card can render.
+      if (uiMessages.some((m) => m.pendingApprovalId)) {
+        try {
+          const approvals = await listApprovals(auth.token);
+          const byId = new Map(approvals.map((a) => [a.id, a]));
+          uiMessages = uiMessages.map((m) =>
+            m.pendingApprovalId && byId.has(m.pendingApprovalId)
+              ? { ...m, approval: byId.get(m.pendingApprovalId) }
+              : m,
+          );
+        } catch (err) {
+          handleApiFailure(err);
+        }
+      }
       // Ignore the result if the user has moved on meanwhile.
       if (activeThreadRef.current === id) {
-        setMessages(detail.messages.map(uiMessageFromApi));
+        setMessages(uiMessages);
       }
     } catch (err) {
       const message = handleApiFailure(err);
@@ -157,9 +185,17 @@ export default function App() {
     }
   }
 
+  /** The server appends an outcome message — reload the thread and list. */
+  function onApprovalDecided() {
+    if (auth.phase !== 'signedIn') return;
+    if (conversationId) void selectConversation(conversationId);
+    void refreshConversations(auth.token);
+  }
+
   async function send(question: string) {
     if (auth.phase !== 'signedIn' || streaming) return;
     const token = auth.token;
+    const features = auth.status.features ?? [];
     const startedIn = conversationId;
     const assistantId = localId('assistant');
     setMessages((prev) => [
@@ -173,10 +209,21 @@ export default function App() {
       setMessages((prev) => prev.map((m) => (m.id === assistantId ? fn(m) : m)));
     };
 
+    // If done carries pendingApprovalId but the approval_required event never
+    // reached us, look the proposal up afterwards so the card still renders.
+    let pendingId: string | undefined;
+    let approvalSeen = false;
+
     try {
       await streamMessage(
         token,
-        { question, ...(startedIn ? { conversationId: startedIn } : {}) },
+        {
+          question,
+          ...(startedIn ? { conversationId: startedIn } : {}),
+          ...(features.includes('agent')
+            ? { mode: agentMode ? ('agent' as const) : ('chat' as const) }
+            : {}),
+        },
         {
           onMeta: ({ conversationId: cid }) => {
             // Adopt the (possibly new) conversation id without reloading.
@@ -192,13 +239,28 @@ export default function App() {
                   resultErrorTimeMs: result.executionTimeMs,
                 }))
               : patchAssistant((m) => ({ ...m, result })),
+          onStep: (step) => patchAssistant((m) => ({ ...m, steps: [...(m.steps ?? []), step] })),
+          onApprovalRequired: (approval) => {
+            approvalSeen = true;
+            patchAssistant((m) => ({ ...m, approval, pendingApprovalId: approval.id }));
+          },
           onDelta: (text) => patchAssistant((m) => ({ ...m, text: (m.text ?? '') + text })),
-          onDone: ({ assistantMessageId }) =>
+          onDone: ({ assistantMessageId, pendingApprovalId }) => {
+            if (pendingApprovalId) pendingId = pendingApprovalId;
             // Adopt the real message id so the answer becomes ratable.
-            patchAssistant((m) => ({ ...m, serverId: assistantMessageId })),
+            patchAssistant((m) => ({
+              ...m,
+              serverId: assistantMessageId,
+              ...(pendingApprovalId ? { pendingApprovalId } : {}),
+            }));
+          },
           onError: (message) => patchAssistant((m) => ({ ...m, error: message })),
         },
       );
+      if (pendingId && !approvalSeen) {
+        const approval = (await listApprovals(token)).find((a) => a.id === pendingId);
+        if (approval) patchAssistant((m) => ({ ...m, approval }));
+      }
     } catch (err) {
       // Pre-stream {error} JSON (validation/auth/not-configured) or a
       // network failure mid-stream.
@@ -218,13 +280,33 @@ export default function App() {
   }
 
   const { status } = auth;
+  const features = status.features ?? [];
+  const writesEnabled = status.writesEnabled ?? false;
   return (
-    <div className="app">
+    <div className={view === 'board' ? 'app app-wide' : 'app'}>
       <header className="header">
         <div className="header-title">
           <h1>ContextGrip AI Chat</h1>
           <span className="model-chip">{status.model}</span>
         </div>
+        {features.includes('board') && (
+          <nav className="view-nav">
+            <button
+              type="button"
+              className={view === 'chat' ? 'nav-btn active' : 'nav-btn'}
+              onClick={() => setView('chat')}
+            >
+              Chat
+            </button>
+            <button
+              type="button"
+              className={view === 'board' ? 'nav-btn active' : 'nav-btn'}
+              onClick={() => setView('board')}
+            >
+              Board
+            </button>
+          </nav>
+        )}
         <div className="header-actions">
           <button type="button" className="ghost-btn" onClick={() => setShowTraining((v) => !v)}>
             Training data
@@ -245,34 +327,54 @@ export default function App() {
 
       {showTraining && <TrainingPanel token={auth.token} onApiError={handleApiFailure} />}
 
-      <div className="toolbar">
-        <select
-          value={conversationId ?? ''}
-          disabled={streaming}
-          onChange={(e) => void selectConversation(e.target.value === '' ? null : e.target.value)}
-        >
-          <option value="">New conversation</option>
-          {conversations.map((c) => (
-            <option key={c.id} value={c.id}>
-              {c.title}
-            </option>
-          ))}
-        </select>
-        {conversationId !== null && (
-          <button
-            type="button"
-            className="ghost-btn danger"
+      {view === 'board' ? (
+        <BoardPage token={auth.token} writesEnabled={writesEnabled} onApiError={handleApiFailure} />
+      ) : (
+        <>
+          <div className="toolbar">
+            <select
+              value={conversationId ?? ''}
+              disabled={streaming}
+              onChange={(e) => void selectConversation(e.target.value === '' ? null : e.target.value)}
+            >
+              <option value="">New conversation</option>
+              {conversations.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.title}
+                </option>
+              ))}
+            </select>
+            {conversationId !== null && (
+              <button
+                type="button"
+                className="ghost-btn danger"
+                disabled={streaming}
+                onClick={() => void removeCurrentConversation()}
+              >
+                Delete
+              </button>
+            )}
+          </div>
+
+          <MessageList
+            messages={messages}
+            loading={loadingThread}
+            token={auth.token}
+            writesEnabled={writesEnabled}
+            onApiError={handleApiFailure}
+            onApprovalDecided={onApprovalDecided}
+          />
+
+          <Composer
             disabled={streaming}
-            onClick={() => void removeCurrentConversation()}
-          >
-            Delete
-          </button>
-        )}
-      </div>
-
-      <MessageList messages={messages} loading={loadingThread} token={auth.token} />
-
-      <Composer disabled={streaming} onSend={(q) => void send(q)} />
+            onSend={(q) => void send(q)}
+            agentAvailable={features.includes('agent')}
+            agentMode={agentMode}
+            agentLocked={conversationId !== null}
+            onAgentModeChange={setAgentMode}
+          />
+        </>
+      )}
 
       <footer className="footer">
         runs on your compute · read-only SQL · {status.model}

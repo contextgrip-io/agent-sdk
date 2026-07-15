@@ -33,16 +33,10 @@ import (
 //  3. Strip comments and blank quoted regions (normalizeForAnalysis), then
 //     require the statement to start with SELECT or WITH.
 func VerifyReadOnlySQL(sql string) error {
-	raw := strings.TrimSpace(sql)
-	raw = strings.TrimSpace(strings.TrimSuffix(raw, ";"))
-	if raw == "" {
-		return fmt.Errorf("empty statement")
+	if err := VerifySingleStatement(sql); err != nil {
+		return err
 	}
-	// Rule 2: multi-statement gate on the RAW text. No quote tracking on
-	// purpose — see the doc comment above.
-	if strings.Contains(raw, ";") {
-		return fmt.Errorf("multiple statements are not allowed (semicolons are rejected even inside quoted text)")
-	}
+	raw := strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(sql), ";"))
 	analyzable := strings.TrimSpace(normalizeForAnalysis(raw))
 	if analyzable == "" {
 		return fmt.Errorf("empty statement")
@@ -50,6 +44,24 @@ func VerifyReadOnlySQL(sql string) error {
 	upper := strings.ToUpper(analyzable)
 	if !strings.HasPrefix(upper, "SELECT") && !strings.HasPrefix(upper, "WITH") {
 		return fmt.Errorf("only read-only SELECT statements are allowed")
+	}
+	return nil
+}
+
+// VerifySingleStatement enforces rules 1–2 of VerifyReadOnlySQL on their
+// own: after trimming whitespace and at most ONE trailing semicolon, any
+// remaining semicolon in the RAW text is rejected regardless of quoting.
+// This is the gate used for approved writes, where the statement may mutate
+// data (no SELECT-prefix requirement) but must still be exactly one
+// statement.
+func VerifySingleStatement(sql string) error {
+	raw := strings.TrimSpace(sql)
+	raw = strings.TrimSpace(strings.TrimSuffix(raw, ";"))
+	if raw == "" {
+		return fmt.Errorf("empty statement")
+	}
+	if strings.Contains(raw, ";") {
+		return fmt.Errorf("multiple statements are not allowed (semicolons are rejected even inside quoted text)")
 	}
 	return nil
 }

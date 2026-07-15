@@ -134,6 +134,15 @@ func (s *Server) captureTraining(ctx context.Context, session, assistantMessageI
 	}
 }
 
+// captureTrainingStep records one successfully executed agent run_query
+// step. sourceID is "<messageId>:<index>" (chat agent, session "agent") or
+// "<taskId>:<index>" (board, session "task") — steps have no standalone ids
+// and several may share one message/task, so the composite keeps the
+// dedupe-by-source upsert unique per step.
+func (s *Server) captureTrainingStep(ctx context.Context, session, sourceID, intent string, step chatstore.Step) {
+	s.captureTraining(ctx, session, sourceID, intent, step.SQL, step.Result, step.Error)
+}
+
 // ── handlers ────────────────────────────────────────────────────────────────
 
 // handleEvalMessage rates an assistant answer. Explicit evals bypass the

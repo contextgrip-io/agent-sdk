@@ -40,10 +40,12 @@ func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {
 
 // statusResponse matches the Status schema.
 type statusResponse struct {
-	Version string `json:"version"`
-	Model   string `json:"model"`
-	Engine  string `json:"engine"`
-	Ready   bool   `json:"ready"`
+	Version       string   `json:"version"`
+	Model         string   `json:"model"`
+	Engine        string   `json:"engine"`
+	Ready         bool     `json:"ready"`
+	Features      []string `json:"features"`
+	WritesEnabled bool     `json:"writesEnabled"`
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
@@ -51,10 +53,16 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	if s.cfg.Model != nil {
 		model = s.cfg.Model.Model()
 	}
+	features := s.cfg.Features
+	if len(features) == 0 {
+		features = AllFeatures
+	}
 	writeJSON(w, http.StatusOK, statusResponse{
-		Version: Version,
-		Model:   model,
-		Engine:  "postgresql",
-		Ready:   s.checkReadiness(r.Context()).Ready,
+		Version:       Version,
+		Model:         model,
+		Engine:        "postgresql",
+		Ready:         s.checkReadiness(r.Context()).Ready,
+		Features:      features,
+		WritesEnabled: s.cfg.WriteDB != nil,
 	})
 }

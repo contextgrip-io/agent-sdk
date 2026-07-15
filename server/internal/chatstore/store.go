@@ -22,10 +22,24 @@ import (
 // Conversation is one chat thread. Titles are derived from the first
 // question, truncated.
 type Conversation struct {
-	ID        string
-	Title     string
+	ID    string
+	Title string
+	// Mode is "chat" or "agent" — a conversation keeps the mode of its
+	// first message.
+	Mode      string
 	CreatedAt time.Time
 	UpdatedAt time.Time
+}
+
+// Step is one agent-mode tool step persisted with an assistant message (and
+// with board tasks).
+type Step struct {
+	Index   int            `json:"index"`
+	Kind    string         `json:"kind"` // "query" | "schema" | "note"
+	Summary string         `json:"summary"`
+	SQL     string         `json:"sql,omitempty"`
+	Result  *ResultSummary `json:"result,omitempty"`
+	Error   string         `json:"error,omitempty"`
 }
 
 // ResultSummary is the bounded query-result snapshot stored with an
@@ -49,7 +63,12 @@ type Message struct {
 	SQL            string
 	Result         *ResultSummary
 	Error          string
-	CreatedAt      time.Time
+	// Steps are agent-mode tool steps persisted with the message.
+	Steps []Step
+	// PendingApprovalID is set while this message's proposed write awaits a
+	// decision, and cleared when it is decided.
+	PendingApprovalID string
+	CreatedAt         time.Time
 }
 
 // Store is the SQLite-backed conversation store.
@@ -147,6 +166,7 @@ func (s *Store) init() error {
 CREATE TABLE IF NOT EXISTS conversations (
   id TEXT PRIMARY KEY,
   title TEXT NOT NULL,
+  mode TEXT NOT NULL DEFAULT 'chat',
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -166,22 +186,30 @@ ON messages (conversation_id, seq ASC);
 	if _, err := s.db.Exec(schema); err != nil {
 		return fmt.Errorf("init chatstore schema: %w", err)
 	}
+	// Additive migration for databases created before the mode column
+	// existed; the error is a benign "duplicate column" on current schemas.
+	_, _ = s.db.Exec(`ALTER TABLE conversations ADD COLUMN mode TEXT NOT NULL DEFAULT 'chat'`)
 	return nil
 }
 
 // CreateConversation inserts a new conversation and prunes the oldest ones
-// beyond the cap.
-func (s *Store) CreateConversation(ctx context.Context, id, title string) (*Conversation, error) {
+// beyond the cap. mode ("chat" | "agent") is fixed for the conversation's
+// lifetime; empty defaults to "chat".
+func (s *Store) CreateConversation(ctx context.Context, id, title, mode string) (*Conversation, error) {
+	if mode == "" {
+		mode = "chat"
+	}
 	now := time.Now().UTC()
 	conv := Conversation{
 		ID:        id,
 		Title:     textutil.TruncateUTF8(title, 120),
+		Mode:      mode,
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
 	_, err := s.db.ExecContext(ctx, `
-INSERT INTO conversations (id, title, created_at, updated_at) VALUES (?, ?, ?, ?)
-`, conv.ID, conv.Title, textutil.FormatSortable(now), textutil.FormatSortable(now))
+INSERT INTO conversations (id, title, mode, created_at, updated_at) VALUES (?, ?, ?, ?, ?)
+`, conv.ID, conv.Title, conv.Mode, textutil.FormatSortable(now), textutil.FormatSortable(now))
 	if err != nil {
 		return nil, fmt.Errorf("create conversation: %w", err)
 	}
@@ -226,7 +254,7 @@ WHERE id NOT IN (
 // GetConversation returns the conversation or (nil, nil) when absent.
 func (s *Store) GetConversation(ctx context.Context, id string) (*Conversation, error) {
 	row := s.db.QueryRowContext(ctx, `
-SELECT id, title, created_at, updated_at FROM conversations WHERE id = ?
+SELECT id, title, mode, created_at, updated_at FROM conversations WHERE id = ?
 `, id)
 	conv, err := scanConversation(row)
 	if err != nil {
@@ -241,7 +269,7 @@ SELECT id, title, created_at, updated_at FROM conversations WHERE id = ?
 // ListConversations returns all conversations, most recently updated first.
 func (s *Store) ListConversations(ctx context.Context) ([]Conversation, error) {
 	rows, err := s.db.QueryContext(ctx, `
-SELECT id, title, created_at, updated_at FROM conversations
+SELECT id, title, mode, created_at, updated_at FROM conversations
 ORDER BY updated_at DESC, id DESC
 `)
 	if err != nil {
@@ -297,7 +325,10 @@ SELECT COALESCE(MAX(seq), 0), COUNT(*) FROM messages WHERE conversation_id = ?
 	}
 	msg.Seq = maxSeq + 1
 
-	payload, err := json.Marshal(messagePayload{Text: msg.Text, SQL: msg.SQL, Result: msg.Result, Error: msg.Error})
+	payload, err := json.Marshal(messagePayload{
+		Text: msg.Text, SQL: msg.SQL, Result: msg.Result, Error: msg.Error,
+		Steps: msg.Steps, PendingApprovalID: msg.PendingApprovalID,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("encode message payload: %w", err)
 	}
@@ -332,6 +363,29 @@ FROM messages WHERE id = ?
 		return nil, err
 	}
 	return &msg, nil
+}
+
+// SetMessagePendingApproval rewrites a message's pendingApprovalId (pass ""
+// to clear it after a decision).
+func (s *Store) SetMessagePendingApproval(ctx context.Context, id, approvalID string) error {
+	msg, err := s.GetMessage(ctx, id)
+	if err != nil {
+		return err
+	}
+	if msg == nil {
+		return fmt.Errorf("message %s not found", id)
+	}
+	payload, err := json.Marshal(messagePayload{
+		Text: msg.Text, SQL: msg.SQL, Result: msg.Result, Error: msg.Error,
+		Steps: msg.Steps, PendingApprovalID: approvalID,
+	})
+	if err != nil {
+		return fmt.Errorf("encode message payload: %w", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE messages SET payload = ? WHERE id = ?`, string(payload), id); err != nil {
+		return fmt.Errorf("update message payload: %w", err)
+	}
+	return nil
 }
 
 // ListMessages returns a conversation's messages in order.
@@ -373,10 +427,12 @@ func sanitizeMessage(msg *Message) {
 }
 
 type messagePayload struct {
-	Text   string         `json:"text,omitempty"`
-	SQL    string         `json:"sql,omitempty"`
-	Result *ResultSummary `json:"result,omitempty"`
-	Error  string         `json:"error,omitempty"`
+	Text              string         `json:"text,omitempty"`
+	SQL               string         `json:"sql,omitempty"`
+	Result            *ResultSummary `json:"result,omitempty"`
+	Error             string         `json:"error,omitempty"`
+	Steps             []Step         `json:"steps,omitempty"`
+	PendingApprovalID string         `json:"pendingApprovalId,omitempty"`
 }
 
 type scanner interface {
@@ -386,7 +442,7 @@ type scanner interface {
 func scanConversation(row scanner) (Conversation, error) {
 	var conv Conversation
 	var createdAt, updatedAt string
-	if err := row.Scan(&conv.ID, &conv.Title, &createdAt, &updatedAt); err != nil {
+	if err := row.Scan(&conv.ID, &conv.Title, &conv.Mode, &createdAt, &updatedAt); err != nil {
 		return Conversation{}, err
 	}
 	var err error
@@ -413,6 +469,8 @@ func scanMessage(row scanner) (Message, error) {
 	msg.SQL = decoded.SQL
 	msg.Result = decoded.Result
 	msg.Error = decoded.Error
+	msg.Steps = decoded.Steps
+	msg.PendingApprovalID = decoded.PendingApprovalID
 	var err error
 	if msg.CreatedAt, err = time.Parse(time.RFC3339Nano, createdAt); err != nil {
 		return Message{}, fmt.Errorf("parse created_at: %w", err)

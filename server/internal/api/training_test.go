@@ -240,7 +240,7 @@ func TestTrainingEvalValidation(t *testing.T) {
 	require.Equal(t, "VALIDATION", decodeBody[errorBody](t, rec).Code)
 
 	// An assistant message without SQL (an error turn) is not ratable.
-	conv, err := env.chat.CreateConversation(context.Background(), "c-x", "t")
+	conv, err := env.chat.CreateConversation(context.Background(), "c-x", "t", "chat")
 	require.NoError(t, err)
 	msg, err := env.chat.AppendMessage(context.Background(), chatstore.Message{
 		ID: "m-nosql", ConversationID: conv.ID, Role: "assistant",

@@ -70,6 +70,10 @@ func routeClass(path string) string {
 		return "training"
 	case strings.HasPrefix(path, "/api/v1/conversations"):
 		return "conversations"
+	case strings.HasPrefix(path, "/api/v1/approvals"):
+		return "approvals"
+	case strings.HasPrefix(path, "/api/v1/tasks"):
+		return "tasks"
 	case strings.HasPrefix(path, "/api/v1/tokens"):
 		return "tokens"
 	case strings.HasPrefix(path, "/api"):

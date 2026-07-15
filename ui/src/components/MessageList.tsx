@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { evalMessage } from '../lib/api';
 import type { UiMessage, Verdict } from '../lib/types';
+import { ApprovalCard } from './ApprovalCard';
 import { ResultTable } from './ResultTable';
 import { SqlBlock } from './SqlBlock';
+import { StepList } from './StepList';
 
 function EvalButtons({ token, messageId }: { token: string; messageId: string }) {
   const [state, setState] = useState<'idle' | 'busy' | 'saved'>('idle');
@@ -47,8 +49,16 @@ function EvalButtons({ token, messageId }: { token: string; messageId: string })
   );
 }
 
-function AssistantMessage({ m, token }: { m: UiMessage; token: string }) {
-  const thinking = m.streaming && !m.text;
+interface AssistantMessageProps {
+  m: UiMessage;
+  token: string;
+  writesEnabled: boolean;
+  onApiError(err: unknown): string;
+  onApprovalDecided(): void;
+}
+
+function AssistantMessage({ m, token, writesEnabled, onApiError, onApprovalDecided }: AssistantMessageProps) {
+  const thinking = m.streaming && !m.text && (m.steps?.length ?? 0) === 0;
   // Only completed answers that carry SQL and a real (server) id can be
   // rated. Streamed turns get their server id from the done event; a turn
   // that ended in a terminal error never gets one.
@@ -58,6 +68,7 @@ function AssistantMessage({ m, token }: { m: UiMessage; token: string }) {
       : undefined;
   return (
     <div className="message assistant">
+      {m.steps && <StepList steps={m.steps} />}
       {m.sql !== undefined && <SqlBlock sql={m.sql} />}
       {m.result && <ResultTable result={m.result} />}
       {m.resultError && (
@@ -69,6 +80,16 @@ function AssistantMessage({ m, token }: { m: UiMessage; token: string }) {
         </div>
       )}
       {m.text && <div className="answer-text">{m.text}</div>}
+      {m.approval && (
+        <ApprovalCard
+          key={m.approval.id}
+          token={token}
+          approval={m.approval}
+          writesEnabled={writesEnabled}
+          onApiError={onApiError}
+          onDecided={onApprovalDecided}
+        />
+      )}
       {m.error && <div className="stream-error">{m.error}</div>}
       {thinking && <div className="thinking">Thinking…</div>}
       {ratableId && <EvalButtons key={ratableId} token={token} messageId={ratableId} />}
@@ -80,9 +101,19 @@ interface Props {
   messages: UiMessage[];
   loading: boolean;
   token: string;
+  writesEnabled: boolean;
+  onApiError(err: unknown): string;
+  onApprovalDecided(): void;
 }
 
-export function MessageList({ messages, loading, token }: Props) {
+export function MessageList({
+  messages,
+  loading,
+  token,
+  writesEnabled,
+  onApiError,
+  onApprovalDecided,
+}: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
 
   // Keep the newest content in view as messages append and deltas stream in.
@@ -107,7 +138,14 @@ export function MessageList({ messages, loading, token }: Props) {
               <div className="user-bubble">{m.text}</div>
             </div>
           ) : (
-            <AssistantMessage key={m.id} m={m} token={token} />
+            <AssistantMessage
+              key={m.id}
+              m={m}
+              token={token}
+              writesEnabled={writesEnabled}
+              onApiError={onApiError}
+              onApprovalDecided={onApprovalDecided}
+            />
           ),
         )
       )}

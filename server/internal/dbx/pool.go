@@ -75,6 +75,37 @@ func (d *DB) RunReadOnly(ctx context.Context, sql string, limit int, timeout tim
 	return RunQueryReadOnly(ctx, pool, sql, limit, timeout)
 }
 
+// ExecuteWrite runs one approved statement in a plain transaction with a
+// statement timeout and reports the rows affected. The statement must be a
+// single statement (raw interior-semicolon rule); there is deliberately no
+// read-only requirement — this is the approval execution path, pointed at
+// AI_CHAT_WRITE_DATABASE_URL.
+func (d *DB) ExecuteWrite(ctx context.Context, sql string) (int64, error) {
+	if err := VerifySingleStatement(sql); err != nil {
+		return 0, err
+	}
+	pool, err := d.getPool(ctx)
+	if err != nil {
+		return 0, err
+	}
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("begin write transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, fmt.Sprintf("SET LOCAL statement_timeout = %d", (30*time.Second).Milliseconds())); err != nil {
+		return 0, fmt.Errorf("set statement timeout: %w", err)
+	}
+	tag, err := tx.Exec(ctx, sql)
+	if err != nil {
+		return 0, fmt.Errorf("execute write: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return 0, fmt.Errorf("commit write: %w", err)
+	}
+	return tag.RowsAffected(), nil
+}
+
 // Close releases the pool if one was created.
 func (d *DB) Close() {
 	d.mu.Lock()

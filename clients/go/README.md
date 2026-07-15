@@ -108,6 +108,93 @@ if err != nil {
 }
 ```
 
+## Agent mode and approvals
+
+With `Mode: "agent"` (requires the `agent` feature — check
+`Status.Features`), the model may take multiple read-only tool steps before
+answering; each completed step arrives as an `OnStep` call. When the model
+proposes a **write**, the turn ends with `OnApprovalRequired` and
+`Done.PendingApprovalID` set — nothing executes until you decide the
+approval. Approving runs the exact proposed SQL against the write connection
+(only when `Status.WritesEnabled` is true).
+
+```go
+var pending aichat.Approval
+err := client.StreamMessage(ctx, aichat.AskRequest{
+	Question: "Deactivate users who have not logged in for a year",
+	Mode:     aichat.ModeAgent,
+}, aichat.StreamHandlers{
+	OnStep: func(s aichat.Step) {
+		fmt.Printf("step %d [%s]: %s\n", s.Index, s.Kind, s.Summary)
+	},
+	OnApprovalRequired: func(a aichat.Approval) {
+		fmt.Println("proposed write:", a.SQL, "—", a.Rationale)
+		pending = a
+	},
+	OnDelta: func(text string) { fmt.Print(text) },
+	OnDone: func(d aichat.Done) {
+		if d.PendingApprovalID != "" {
+			fmt.Println("\nawaiting approval:", d.PendingApprovalID)
+		}
+	},
+})
+if err != nil {
+	log.Fatal(err)
+}
+
+// After reviewing, approve (executes the write) or reject:
+res, err := client.DecideApproval(ctx, pending.ID, aichat.DecisionApprove)
+if err != nil {
+	var apiErr *aichat.APIError
+	if errors.As(err, &apiErr) && apiErr.Code == "ALREADY_DECIDED" {
+		// someone else decided it first
+	}
+	log.Fatal(err)
+}
+if res.Error != "" {
+	fmt.Println("write failed:", res.Error)
+} else if res.Result != nil {
+	fmt.Printf("write ok: %d rows in %dms\n", res.Result.RowCount, res.Result.ExecutionTimeMs)
+}
+
+// All pending approvals (chat and board sources):
+approvals, err := client.ListApprovals(ctx) // GET /api/v1/approvals
+```
+
+`Ask` supports agent mode too: the response then carries `Steps` (and
+`PendingApprovalID` when a write awaits a decision) instead of the single
+`SQL`/`Result` pair.
+
+## Tasks (board)
+
+Tasks run in the background through the same agent loop (requires the
+`board` feature), one at a time, oldest first. A proposed write pauses the
+task in `needs_approval`; the approval decision resumes it.
+
+```go
+task, err := client.CreateTask(ctx, "Weekly cleanup", "Archive sessions older than 90 days")
+if err != nil {
+	log.Fatal(err)
+}
+
+// Poll until it finishes or needs a decision:
+detail, err := client.GetTask(ctx, task.ID)
+switch detail.Task.Status {
+case aichat.TaskStatusNeedsApproval:
+	res, err := client.DecideApproval(ctx, detail.PendingApproval.ID, aichat.DecisionApprove)
+	_ = res // the task resumes automatically after the decision
+	_ = err
+case aichat.TaskStatusDone:
+	fmt.Println("answer:", detail.Task.Answer)
+case aichat.TaskStatusFailed:
+	fmt.Println("failed:", detail.Task.Error)
+}
+
+blocked, err := client.ListTasks(ctx, aichat.TaskStatusNeedsApproval) // "" lists all
+task, err = client.CancelTask(ctx, task.ID)  // 409 TASK_FINISHED if already finished
+err = client.DeleteTask(ctx, task.ID)        // finished tasks only; 409 TASK_ACTIVE otherwise
+```
+
 ## Training data
 
 Every completed exchange can be captured as a training record (question as
