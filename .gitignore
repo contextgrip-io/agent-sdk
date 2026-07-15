@@ -1,0 +1,15 @@
+.env
+data/
+node_modules/
+ui/dist/
+clients/typescript/dist/
+clients/typescript/node_modules/
+clients/python/.venv/
+clients/python/dist/
+__pycache__/
+*.egg-info/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+# committed placeholder is allowed; real build is copied in Docker
+!server/internal/webui/dist/

@@ -1,0 +1,9 @@
+.git
+.env
+data
+clients
+docs
+ui/node_modules
+ui/dist
+server/internal/webui/dist
+**/*.sqlite*

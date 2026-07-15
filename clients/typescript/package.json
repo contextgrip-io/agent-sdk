@@ -1,0 +1,46 @@
+{
+  "name": "@contextgrip/ai-chat-client",
+  "version": "0.1.0",
+  "description": "TypeScript client for the ContextGrip AI Chat API (self-hosted NL->SQL chat over your own PostgreSQL).",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "src",
+    "README.md"
+  ],
+  "sideEffects": false,
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "npm run build && node --test test/*.test.js",
+    "prepare": "npm run build"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/contextgrip-io/agent-sdk.git",
+    "directory": "clients/typescript"
+  },
+  "keywords": [
+    "contextgrip",
+    "ai-chat",
+    "nl-to-sql",
+    "postgresql",
+    "sse",
+    "client"
+  ],
+  "devDependencies": {
+    "typescript": "^5.5.4"
+  }
+}

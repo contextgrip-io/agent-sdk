@@ -1,0 +1,14 @@
+services:
+  ai-chat:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      AI_CHAT_DB_PATH: /data/ai-chat.sqlite
+    ports:
+      - "${PORT:-8080}:8080"
+    volumes:
+      - ai-chat-data:/data
+
+volumes:
+  ai-chat-data:

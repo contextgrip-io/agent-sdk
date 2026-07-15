@@ -1,0 +1,385 @@
+openapi: 3.1.0
+info:
+  title: ContextGrip AI Chat
+  description: >
+    Self-hosted NL->SQL chat service. Ask questions about a PostgreSQL database
+    in plain language; the service generates one read-only SQL statement,
+    executes it inside a READ ONLY transaction with a statement timeout, and
+    answers with the SQL always shown. Runs entirely on your own compute with
+    your own Anthropic API key. This file is the source of truth for the
+    server, the embedded UI, and the clients under clients/.
+  version: 0.1.0
+  license:
+    name: Apache-2.0
+    url: https://www.apache.org/licenses/LICENSE-2.0
+
+servers:
+  - url: http://localhost:8080
+
+security:
+  - bearerAuth: []
+
+tags:
+  - name: chat
+  - name: conversations
+  - name: tokens
+  - name: system
+
+paths:
+  /healthz:
+    get:
+      tags: [system]
+      security: []
+      summary: Liveness probe. Always 200 when the process is up.
+      responses:
+        "200":
+          description: OK
+          content:
+            text/plain:
+              schema: { type: string, const: ok }
+
+  /readyz:
+    get:
+      tags: [system]
+      security: []
+      summary: Readiness probe. 503 until the model key and database are configured and reachable.
+      responses:
+        "200":
+          description: Ready
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Readiness" }
+        "503":
+          description: Not ready (missing ANTHROPIC_API_KEY, DATABASE_URL, or database unreachable)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Readiness" }
+
+  /api/v1/status:
+    get:
+      tags: [system]
+      summary: Service status for authenticated callers.
+      responses:
+        "200":
+          description: Status
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Status" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/v1/ask:
+    post:
+      tags: [chat]
+      summary: One-shot question. Blocks until the full answer is ready and returns JSON.
+      description: >
+        Runs the same loop as the streaming endpoint (generate SQL -> verify
+        read-only -> execute in READ ONLY tx -> explain) but returns a single
+        JSON document. Creates a new conversation unless conversationId is
+        given. Failed query execution is NOT an HTTP error: the response
+        carries resultError and an answer explaining the failure.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AskRequest" }
+      responses:
+        "200":
+          description: Answer
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AskResponse" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/NotConfigured" }
+
+  /api/v1/messages:
+    post:
+      tags: [chat]
+      summary: Ask a question and stream the answer over SSE.
+      description: >
+        Server-Sent Events stream. Event sequence: meta -> sql -> result ->
+        delta* -> done, or error terminally at any point after headers are
+        sent. Every event's data field is a single JSON object. Creates a new
+        conversation unless conversationId is given (the meta event carries
+        the conversation id either way). Pre-stream failures (validation,
+        auth, unknown conversation) are plain JSON errors with 4xx/5xx status.
+
+        Event payloads:
+          meta:   {"conversationId": string, "userMessageId": string}
+          sql:    {"sql": string}
+          result: ResultSummary, or {"error": string, "executionTimeMs": number} when execution failed
+          delta:  {"text": string}
+          done:   {"conversationId": string, "assistantMessageId": string}
+          error:  {"message": string}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AskRequest" }
+      responses:
+        "200":
+          description: SSE stream (Content-Type text/event-stream)
+          content:
+            text/event-stream:
+              schema: { type: string }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/NotConfigured" }
+
+  /api/v1/conversations:
+    get:
+      tags: [conversations]
+      summary: List conversations, most recently updated first.
+      responses:
+        "200":
+          description: Conversations
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Conversation" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/v1/conversations/{id}:
+    get:
+      tags: [conversations]
+      summary: Fetch one conversation with its messages in order.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Conversation detail
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ConversationDetail" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      tags: [conversations]
+      summary: Delete a conversation and its messages.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { deleted: { type: boolean, const: true } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/v1/tokens:
+    get:
+      tags: [tokens]
+      summary: List named API tokens (admin — primary APP_ACCESS_TOKEN only).
+      description: Raw token values are never returned; only label, fingerprint, and usage metadata.
+      responses:
+        "200":
+          description: Tokens
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/TokenInfo" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/AdminRequired" }
+    post:
+      tags: [tokens]
+      summary: Mint a named API token (admin — primary APP_ACCESS_TOKEN only).
+      description: >
+        The raw token value is returned once in this response and stored only
+        as a SHA-256 hash. Named tokens can call every endpoint except token
+        management.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [label]
+              properties:
+                label: { type: string, maxLength: 120 }
+      responses:
+        "201":
+          description: Created token (raw value shown once)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CreatedToken" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/AdminRequired" }
+
+  /api/v1/tokens/{id}:
+    delete:
+      tags: [tokens]
+      summary: Revoke a named API token (admin — primary APP_ACCESS_TOKEN only).
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Revoked
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { deleted: { type: boolean, const: true } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/AdminRequired" }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: >
+        Either the primary APP_ACCESS_TOKEN from the server environment, or a
+        named token minted via POST /api/v1/tokens. Token management endpoints
+        accept only the primary token.
+
+  responses:
+    BadRequest:
+      description: Validation failure
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Unauthorized:
+      description: Missing or invalid bearer token (code UNAUTHORIZED)
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    AdminRequired:
+      description: Named tokens cannot manage tokens (code ADMIN_REQUIRED)
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    NotFound:
+      description: Unknown resource (code NOT_FOUND)
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    NotConfigured:
+      description: Model key or database not configured (code NOT_CONFIGURED)
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error: { type: string, description: Human-readable message }
+        code:
+          type: string
+          description: >
+            Stable machine slug. Known values: UNAUTHORIZED, ADMIN_REQUIRED,
+            VALIDATION, NOT_FOUND, NOT_CONFIGURED, CONVERSATION_FULL,
+            STORE_ERROR, MODEL_ERROR, STREAM_UNSUPPORTED.
+
+    Readiness:
+      type: object
+      required: [ready]
+      properties:
+        ready: { type: boolean }
+        model: { type: boolean, description: ANTHROPIC_API_KEY is configured }
+        database: { type: boolean, description: DATABASE_URL is configured and reachable }
+
+    Status:
+      type: object
+      required: [version, model, engine, ready]
+      properties:
+        version: { type: string }
+        model: { type: string, description: Anthropic model id in use }
+        engine: { type: string, const: postgresql }
+        ready: { type: boolean }
+
+    AskRequest:
+      type: object
+      required: [question]
+      properties:
+        question: { type: string, maxLength: 4000 }
+        conversationId:
+          type: string
+          description: Continue an existing conversation; omit to start a new one.
+
+    AskResponse:
+      type: object
+      required: [conversationId, userMessageId, assistantMessageId, sql, answer]
+      properties:
+        conversationId: { type: string }
+        userMessageId: { type: string }
+        assistantMessageId: { type: string }
+        sql: { type: string, description: The generated read-only SQL (always shown) }
+        result: { $ref: "#/components/schemas/ResultSummary" }
+        resultError:
+          type: string
+          description: Set instead of result when query execution failed.
+        answer: { type: string, description: Natural-language explanation of the outcome }
+
+    ResultSummary:
+      type: object
+      required: [rowCount, truncated, executionTimeMs]
+      properties:
+        columns:
+          type: array
+          items: { type: string }
+        rowSample:
+          type: array
+          description: Up to 20 rows; string cells bounded to 256 chars.
+          items:
+            type: array
+            items: {}
+        rowCount: { type: integer, description: Rows returned (capped at 100; see truncated) }
+        truncated: { type: boolean }
+        executionTimeMs: { type: integer }
+
+    Conversation:
+      type: object
+      required: [id, title, createdAt, updatedAt]
+      properties:
+        id: { type: string }
+        title: { type: string, description: Derived from the first question, max 80 chars }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    ConversationDetail:
+      type: object
+      required: [conversation, messages]
+      properties:
+        conversation: { $ref: "#/components/schemas/Conversation" }
+        messages:
+          type: array
+          items: { $ref: "#/components/schemas/Message" }
+
+    Message:
+      type: object
+      required: [id, role, createdAt]
+      properties:
+        id: { type: string }
+        role: { type: string, enum: [user, assistant] }
+        text: { type: string }
+        sql: { type: string }
+        result: { $ref: "#/components/schemas/ResultSummary" }
+        error: { type: string }
+        createdAt: { type: string, format: date-time }
+
+    TokenInfo:
+      type: object
+      required: [id, label, fingerprint, createdAt]
+      properties:
+        id: { type: string }
+        label: { type: string }
+        fingerprint: { type: string, description: First 8 hex chars of SHA-256(token) }
+        createdAt: { type: string, format: date-time }
+        lastUsedAt: { type: string, format: date-time }
+
+    CreatedToken:
+      allOf:
+        - $ref: "#/components/schemas/TokenInfo"
+        - type: object
+          required: [token]
+          properties:
+            token: { type: string, description: Raw token value — shown only in this response }
