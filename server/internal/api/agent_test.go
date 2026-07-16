@@ -7,7 +7,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/contextgrip-io/agent-sdk/server/internal/assistant"
+	"github.com/contextgrip-io/ai-chat/server/internal/assistant"
 )
 
 // TestAgentSSEMultiStep: a multi-step read-only agent run streams

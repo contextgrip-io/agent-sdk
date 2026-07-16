@@ -1,3 +1,3 @@
-module github.com/contextgrip-io/agent-sdk/clients/go
+module github.com/contextgrip-io/ai-chat/clients/go
 
 go 1.26

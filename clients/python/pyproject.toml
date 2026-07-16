@@ -26,8 +26,8 @@ dependencies = ["httpx>=0.27"]
 dev = ["pytest>=8"]
 
 [project.urls]
-Homepage = "https://github.com/contextgrip-io/agent-sdk"
-Source = "https://github.com/contextgrip-io/agent-sdk/tree/main/clients/python"
+Homepage = "https://github.com/contextgrip-io/ai-chat"
+Source = "https://github.com/contextgrip-io/ai-chat/tree/main/clients/python"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/contextgrip_ai_chat"]

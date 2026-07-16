@@ -6,7 +6,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/contextgrip-io/agent-sdk/server/internal/chatstore"
+	"github.com/contextgrip-io/ai-chat/server/internal/chatstore"
 )
 
 // conversationView matches the Conversation schema.

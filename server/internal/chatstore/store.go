@@ -16,7 +16,7 @@ import (
 
 	_ "modernc.org/sqlite"
 
-	"github.com/contextgrip-io/agent-sdk/server/internal/textutil"
+	"github.com/contextgrip-io/ai-chat/server/internal/textutil"
 )
 
 // Conversation is one chat thread. Titles are derived from the first

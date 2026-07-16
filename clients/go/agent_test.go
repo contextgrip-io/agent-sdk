@@ -11,7 +11,7 @@ import (
 	"reflect"
 	"testing"
 
-	aichat "github.com/contextgrip-io/agent-sdk/clients/go"
+	aichat "github.com/contextgrip-io/ai-chat/clients/go"
 )
 
 func TestStreamMessageAgentMode(t *testing.T) {

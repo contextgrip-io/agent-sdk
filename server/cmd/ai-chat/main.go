@@ -16,14 +16,14 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/contextgrip-io/agent-sdk/server/internal/api"
-	"github.com/contextgrip-io/agent-sdk/server/internal/approvalstore"
-	"github.com/contextgrip-io/agent-sdk/server/internal/assistant"
-	"github.com/contextgrip-io/agent-sdk/server/internal/chatstore"
-	"github.com/contextgrip-io/agent-sdk/server/internal/dbx"
-	"github.com/contextgrip-io/agent-sdk/server/internal/taskstore"
-	"github.com/contextgrip-io/agent-sdk/server/internal/tokenstore"
-	"github.com/contextgrip-io/agent-sdk/server/internal/trainingstore"
+	"github.com/contextgrip-io/ai-chat/server/internal/api"
+	"github.com/contextgrip-io/ai-chat/server/internal/approvalstore"
+	"github.com/contextgrip-io/ai-chat/server/internal/assistant"
+	"github.com/contextgrip-io/ai-chat/server/internal/chatstore"
+	"github.com/contextgrip-io/ai-chat/server/internal/dbx"
+	"github.com/contextgrip-io/ai-chat/server/internal/taskstore"
+	"github.com/contextgrip-io/ai-chat/server/internal/tokenstore"
+	"github.com/contextgrip-io/ai-chat/server/internal/trainingstore"
 )
 
 func env(key, fallback string) string {

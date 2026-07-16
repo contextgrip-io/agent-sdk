@@ -8,7 +8,7 @@ dependencies outside the Go standard library.
 ## Install
 
 ```sh
-go get github.com/contextgrip-io/agent-sdk/clients/go
+go get github.com/contextgrip-io/ai-chat/clients/go
 ```
 
 The module lives in a subdirectory of the repository, so release tags for it
@@ -16,14 +16,14 @@ are prefixed with the module path: `clients/go/vX.Y.Z`. To pin a specific
 version:
 
 ```sh
-go get github.com/contextgrip-io/agent-sdk/clients/go@clients/go/v0.1.0
+go get github.com/contextgrip-io/ai-chat/clients/go@clients/go/v0.1.0
 ```
 
 The package name is `aichat`; since the import path ends in `go`, import it
 with an explicit name:
 
 ```go
-import aichat "github.com/contextgrip-io/agent-sdk/clients/go"
+import aichat "github.com/contextgrip-io/ai-chat/clients/go"
 ```
 
 ## Ask (one-shot)
@@ -41,7 +41,7 @@ import (
 	"fmt"
 	"log"
 
-	aichat "github.com/contextgrip-io/agent-sdk/clients/go"
+	aichat "github.com/contextgrip-io/ai-chat/clients/go"
 )
 
 func main() {

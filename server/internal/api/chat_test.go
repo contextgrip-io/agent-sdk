@@ -13,9 +13,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/contextgrip-io/agent-sdk/server/internal/assistant"
-	"github.com/contextgrip-io/agent-sdk/server/internal/chatstore"
-	"github.com/contextgrip-io/agent-sdk/server/internal/dbx"
+	"github.com/contextgrip-io/ai-chat/server/internal/assistant"
+	"github.com/contextgrip-io/ai-chat/server/internal/chatstore"
+	"github.com/contextgrip-io/ai-chat/server/internal/dbx"
 )
 
 // TestSSEEventSequence is the full happy-path stream:

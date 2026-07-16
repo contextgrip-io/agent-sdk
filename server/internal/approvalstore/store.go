@@ -9,8 +9,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/contextgrip-io/agent-sdk/server/internal/chatstore"
-	"github.com/contextgrip-io/agent-sdk/server/internal/textutil"
+	"github.com/contextgrip-io/ai-chat/server/internal/chatstore"
+	"github.com/contextgrip-io/ai-chat/server/internal/textutil"
 )
 
 // Statuses.

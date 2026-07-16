@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	aichat "github.com/contextgrip-io/agent-sdk/clients/go"
+	aichat "github.com/contextgrip-io/ai-chat/clients/go"
 )
 
 // sseServer serves the given raw SSE stream in small flushed chunks so

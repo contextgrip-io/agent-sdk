@@ -33,8 +33,8 @@ contract they ship with.
 ## Quickstart
 
 ```bash
-git clone https://github.com/contextgrip-io/agent-sdk
-cd agent-sdk && cp .env.example .env
+git clone https://github.com/contextgrip-io/ai-chat
+cd ai-chat && cp .env.example .env
 # edit .env: DATABASE_URL, ANTHROPIC_API_KEY, APP_ACCESS_TOKEN
 docker compose up -d
 # open http://localhost:8080 and sign in with your APP_ACCESS_TOKEN
@@ -44,7 +44,7 @@ Or without cloning, once an image is published:
 
 ```bash
 docker run -d --env-file .env -p 8080:8080 -v ai-chat-data:/data \
-  ghcr.io/contextgrip-io/agent-sdk
+  ghcr.io/contextgrip-io/ai-chat
 ```
 
 Or (planned) one-click from the ContextGrip console: **Servers → Add Service →
@@ -102,9 +102,9 @@ curl -s -X POST http://localhost:8080/api/v1/tokens \
 
 | Language | Package | Install |
 |---|---|---|
-| Python | `contextgrip-ai-chat` | `pip install "contextgrip-ai-chat @ git+https://github.com/contextgrip-io/agent-sdk#subdirectory=clients/python"` |
+| Python | `contextgrip-ai-chat` | `pip install "contextgrip-ai-chat @ git+https://github.com/contextgrip-io/ai-chat#subdirectory=clients/python"` |
 | TypeScript | `@contextgrip/ai-chat-client` | see [clients/typescript](clients/typescript) |
-| Go | `github.com/contextgrip-io/agent-sdk/clients/go` | `go get` |
+| Go | `github.com/contextgrip-io/ai-chat/clients/go` | `go get` |
 
 ```python
 from contextgrip_ai_chat import Client
@@ -158,7 +158,7 @@ server/               # Go API server (embeds the built UI)
 ui/                   # React chat UI (a client of the API like any other)
 clients/python/       # contextgrip-ai-chat
 clients/typescript/   # @contextgrip/ai-chat-client
-clients/go/           # github.com/contextgrip-io/agent-sdk/clients/go
+clients/go/           # github.com/contextgrip-io/ai-chat/clients/go
 ```
 
 ## Development

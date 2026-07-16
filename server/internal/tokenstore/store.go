@@ -14,8 +14,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/contextgrip-io/agent-sdk/server/internal/chatstore"
-	"github.com/contextgrip-io/agent-sdk/server/internal/textutil"
+	"github.com/contextgrip-io/ai-chat/server/internal/chatstore"
+	"github.com/contextgrip-io/ai-chat/server/internal/textutil"
 )
 
 // Token is the stored metadata for one named API token.

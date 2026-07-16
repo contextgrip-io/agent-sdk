@@ -7,8 +7,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/contextgrip-io/agent-sdk/server/internal/assistant"
-	"github.com/contextgrip-io/agent-sdk/server/internal/chatstore"
+	"github.com/contextgrip-io/ai-chat/server/internal/assistant"
+	"github.com/contextgrip-io/ai-chat/server/internal/chatstore"
 )
 
 func newTestStore(t *testing.T) *Store {

@@ -12,8 +12,8 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
-	"github.com/contextgrip-io/agent-sdk/server/internal/chatstore"
-	"github.com/contextgrip-io/agent-sdk/server/internal/trainingstore"
+	"github.com/contextgrip-io/ai-chat/server/internal/chatstore"
+	"github.com/contextgrip-io/ai-chat/server/internal/trainingstore"
 )
 
 // Training data: completed exchanges are captured silently (toggle, default

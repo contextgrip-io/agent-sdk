@@ -8,8 +8,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/contextgrip-io/agent-sdk/server/internal/assistant"
-	"github.com/contextgrip-io/agent-sdk/server/internal/taskstore"
+	"github.com/contextgrip-io/ai-chat/server/internal/assistant"
+	"github.com/contextgrip-io/ai-chat/server/internal/taskstore"
 )
 
 // fileTask posts a task and returns its view.

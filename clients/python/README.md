@@ -1,6 +1,6 @@
 # contextgrip-ai-chat
 
-Python client for the [ContextGrip AI Chat](https://github.com/contextgrip-io/agent-sdk)
+Python client for the [ContextGrip AI Chat](https://github.com/contextgrip-io/ai-chat)
 API — ask your PostgreSQL database questions in plain language against your own
 self-hosted server. The contract this client mirrors is
 [`openapi.yaml`](../../openapi.yaml) at the repository root.
@@ -12,7 +12,7 @@ self-hosted server. The contract this client mirrors is
 ## Install
 
 ```bash
-pip install "contextgrip-ai-chat @ git+https://github.com/contextgrip-io/agent-sdk#subdirectory=clients/python"
+pip install "contextgrip-ai-chat @ git+https://github.com/contextgrip-io/ai-chat#subdirectory=clients/python"
 ```
 
 ## Ask a question

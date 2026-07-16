@@ -17,8 +17,8 @@ subdirectory. npm cannot install a git subdirectory directly, so build a
 tarball from a clone:
 
 ```bash
-git clone https://github.com/contextgrip-io/agent-sdk
-cd agent-sdk/clients/typescript
+git clone https://github.com/contextgrip-io/ai-chat
+cd ai-chat/clients/typescript
 npm install && npm pack        # produces contextgrip-ai-chat-client-0.1.0.tgz
 
 # then, in your project:

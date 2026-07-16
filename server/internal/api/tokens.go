@@ -7,7 +7,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/contextgrip-io/agent-sdk/server/internal/tokenstore"
+	"github.com/contextgrip-io/ai-chat/server/internal/tokenstore"
 )
 
 // tokenView matches the TokenInfo schema.

@@ -104,4 +104,4 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: build
-        run: docker build -t agent-sdk:ci .
+        run: docker build -t ai-chat:ci .

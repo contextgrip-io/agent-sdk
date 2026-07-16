@@ -11,9 +11,9 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
-	"github.com/contextgrip-io/agent-sdk/server/internal/approvalstore"
-	"github.com/contextgrip-io/agent-sdk/server/internal/chatstore"
-	"github.com/contextgrip-io/agent-sdk/server/internal/taskstore"
+	"github.com/contextgrip-io/ai-chat/server/internal/approvalstore"
+	"github.com/contextgrip-io/ai-chat/server/internal/chatstore"
+	"github.com/contextgrip-io/ai-chat/server/internal/taskstore"
 )
 
 // WriteExecutor executes one approved statement against the write connection
